@@ -22,6 +22,8 @@ def export_model_to_excel(
         output.balance_sheet.to_excel(writer, sheet_name="Balance Sheet", index=False)
         output.cash_flow.to_excel(writer, sheet_name="Cash Flow", index=False)
         output.fcf.to_excel(writer, sheet_name="FCF", index=False)
+        output.ppe_schedule.to_excel(writer, sheet_name="PP&E Schedule", index=False)
+        output.debt_schedule.to_excel(writer, sheet_name="Debt Schedule", index=False)
         sensitivity.to_excel(writer, sheet_name="Sensitivity")
 
     return out_path

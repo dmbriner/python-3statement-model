@@ -15,6 +15,9 @@ class ModelOutput:
     balance_sheet: pd.DataFrame
     cash_flow: pd.DataFrame
     fcf: pd.DataFrame
+    ppe_schedule: pd.DataFrame
+    debt_schedule: pd.DataFrame
+    equity_schedule: pd.DataFrame
 
 
 def _base_year(df: pd.DataFrame) -> pd.Series:
@@ -32,6 +35,9 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
     balance_rows: list[dict] = []
     cash_rows: list[dict] = []
     fcf_rows: list[dict] = []
+    ppe_rows: list[dict] = []
+    debt_rows: list[dict] = []
+    equity_rows: list[dict] = []
 
     prev_revenue = float(base["revenue"])
     prev_ar = float(base["accounts_receivable"])
@@ -41,6 +47,21 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
     prev_debt = float(base["debt"])
     prev_cash = float(base["cash"])
     shares = max(float(base["shares_outstanding"]), 1.0)
+
+    # Balance sheet "other" items — held constant at base year values
+    other_assets = float(base.get("other_assets", 0.0))
+    other_liabilities = float(base.get("other_liabilities", 0.0))
+
+    # Starting equity from historical data (or approximate from assets - liabilities)
+    base_equity = float(base.get("equity", 0.0))
+    if base_equity == 0.0:
+        # Estimate: total observable assets minus total observable liabilities
+        base_equity = (
+            float(base["cash"]) + float(base["accounts_receivable"]) +
+            float(base["inventory"]) + float(base["ppne"]) + other_assets -
+            float(base["debt"]) - float(base["accounts_payable"]) - other_liabilities
+        )
+    prev_equity = base_equity
 
     for i, year in enumerate(years):
         revenue = prev_revenue * (1 + assumptions.revenue_growth[i])
@@ -94,6 +115,17 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         cff = cff_pre_cash_sweep + debt_draw - excess_cash_sweep
         free_cash_flow = ebit * (1 - assumptions.tax_rate) + depreciation - capex - change_nwc
 
+        # Equity rollforward (for display in equity schedule)
+        retained_add = net_income - dividends
+        ending_equity = prev_equity + retained_add
+
+        # Full balance sheet totals — equity is the PLUG so balance sheet always balances
+        total_assets = ending_cash + ar + inventory + ppne + other_assets
+        total_liabilities = debt + ap + other_liabilities
+        total_equity_plug = total_assets - total_liabilities   # Ensures Assets = Liabilities + Equity
+        # Plug vs rollforward difference = unmodeled balance sheet changes (deferred taxes, goodwill, etc.)
+        bs_plug = total_equity_plug - ending_equity
+
         income_rows.append(
             {
                 "year": year,
@@ -115,13 +147,24 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         balance_rows.append(
             {
                 "year": year,
+                # Assets
                 "cash": ending_cash,
                 "accounts_receivable": ar,
                 "inventory": inventory,
+                "other_assets": other_assets,
                 "ppne": ppne,
-                "total_assets_proxy": ending_cash + ar + inventory + ppne,
+                "total_assets": total_assets,
+                # Liabilities
                 "accounts_payable": ap,
                 "debt": debt,
+                "other_liabilities": other_liabilities,
+                "total_liabilities": total_liabilities,
+                # Equity
+                "total_equity": total_equity_plug,
+                "equity_rollforward": ending_equity,
+                "total_liabilities_and_equity": total_liabilities + total_equity_plug,
+                "bs_plug": bs_plug,
+                # Working capital (for schedules tab)
                 "nwc": nwc,
             }
         )
@@ -129,12 +172,16 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         cash_rows.append(
             {
                 "year": year,
+                "net_income": net_income,
+                "depreciation": depreciation,
+                "change_nwc": -change_nwc,  # sign convention: negative change = cash inflow
                 "cfo": cfo,
+                "capex": -capex,
                 "cfi": cfi,
-                "cff": cff,
                 "debt_draw": debt_draw,
-                "debt_repayment": debt_repayment + excess_cash_sweep,
-                "dividends": dividends,
+                "debt_repayment": -(debt_repayment + excess_cash_sweep),
+                "dividends": -dividends,
+                "cff": cff,
                 "net_change_cash": cfo + cfi + cff,
             }
         )
@@ -142,11 +189,45 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         fcf_rows.append(
             {
                 "year": year,
+                "ebitda": ebitda,
                 "nopat": ebit * (1 - assumptions.tax_rate),
                 "depreciation": depreciation,
                 "capex": capex,
                 "change_nwc": change_nwc,
                 "fcf": free_cash_flow,
+            }
+        )
+
+        ppe_rows.append(
+            {
+                "year": year,
+                "beginning_ppne": prev_ppne,
+                "capex": capex,
+                "depreciation": depreciation,
+                "ending_ppne": ppne,
+            }
+        )
+
+        debt_rows.append(
+            {
+                "year": year,
+                "beginning_debt": prev_debt,
+                "debt_draw": debt_draw,
+                "debt_repayment": debt_repayment + excess_cash_sweep,
+                "ending_debt": debt,
+                "interest_expense": interest_expense,
+                "avg_debt": average_debt,
+            }
+        )
+
+        equity_rows.append(
+            {
+                "year": year,
+                "beginning_equity": prev_equity,
+                "net_income": net_income,
+                "dividends": dividends,
+                "other_changes": 0.0,   # share issuance / buybacks (not modeled)
+                "ending_equity": ending_equity,
             }
         )
 
@@ -157,13 +238,17 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         prev_ppne = ppne
         prev_debt = debt
         prev_cash = ending_cash
+        prev_equity = ending_equity
 
     income_df = pd.DataFrame(income_rows)
     balance_df = pd.DataFrame(balance_rows)
     cash_df = pd.DataFrame(cash_rows)
     fcf_df = pd.DataFrame(fcf_rows)
+    ppe_df = pd.DataFrame(ppe_rows)
+    debt_df = pd.DataFrame(debt_rows)
+    equity_df = pd.DataFrame(equity_rows)
 
-    for frame in (income_df, balance_df, cash_df, fcf_df):
+    for frame in (income_df, balance_df, cash_df, fcf_df, ppe_df, debt_df, equity_df):
         numeric_cols = [c for c in frame.columns if c != "year"]
         frame[numeric_cols] = frame[numeric_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
@@ -172,4 +257,7 @@ def run_three_statement_model(historical_data: HistoricalData, assumptions: Mode
         balance_sheet=balance_df,
         cash_flow=cash_df,
         fcf=fcf_df,
+        ppe_schedule=ppe_df,
+        debt_schedule=debt_df,
+        equity_schedule=equity_df,
     )

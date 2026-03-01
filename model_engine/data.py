@@ -23,6 +23,13 @@ REQUIRED_COLUMNS = [
     "capex",
 ]
 
+# Optional columns — filled with 0 if absent
+OPTIONAL_COLUMNS = [
+    "equity",             # Total stockholders' equity
+    "other_assets",       # Other assets not explicitly tracked (goodwill, intangibles, etc.)
+    "other_liabilities",  # Other liabilities not explicitly tracked (deferred taxes, etc.)
+]
+
 
 @dataclass
 class HistoricalData:
@@ -36,7 +43,15 @@ def _validate_historical_df(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Historical input is missing required columns: {missing}")
 
     cleaned = df.copy()
-    cleaned = cleaned[REQUIRED_COLUMNS]
+    # Keep all required + any optional columns that are present
+    cols_to_keep = REQUIRED_COLUMNS + [c for c in OPTIONAL_COLUMNS if c in cleaned.columns]
+    cleaned = cleaned[cols_to_keep]
+
+    # Fill missing optional columns with 0 so downstream code can always access them
+    for col in OPTIONAL_COLUMNS:
+        if col not in cleaned.columns:
+            cleaned[col] = 0.0
+
     cleaned = cleaned.sort_values("year").reset_index(drop=True)
     return cleaned
 
@@ -77,6 +92,32 @@ def _load_from_yfinance(ticker: str) -> HistoricalData:
         tax_expense = abs(get(is_df, "Tax Provision"))
         tax_rate = (tax_expense / pretax_income) if pretax_income else 0.24
 
+        cash = get(bs_df, "Cash And Cash Equivalents")
+        ar = get(bs_df, "Accounts Receivable")
+        inventory = get(bs_df, "Inventory")
+        ap = get(bs_df, "Accounts Payable")
+        ppne = get(bs_df, "Net PPE")
+        debt = get(bs_df, "Total Debt")
+        shares = get(bs_df, "Ordinary Shares Number", default=1.0)
+
+        # Equity — try several yfinance field names
+        equity = (
+            get(bs_df, "Stockholders Equity") or
+            get(bs_df, "Common Stock Equity") or
+            get(bs_df, "Total Equity Gross Minority Interest") or
+            0.0
+        )
+
+        # Other assets = total assets minus what we explicitly track
+        total_assets = get(bs_df, "Total Assets")
+        explicit_assets = cash + ar + inventory + ppne
+        other_assets = max(total_assets - explicit_assets, 0.0) if total_assets > 0 else 0.0
+
+        # Other liabilities = total liabilities minus debt and AP
+        total_liab = get(bs_df, "Total Liabilities Net Minority Interest") or get(bs_df, "Total Liabilities")
+        explicit_liab = debt + ap
+        other_liabilities = max(total_liab - explicit_liab, 0.0) if total_liab > 0 else 0.0
+
         rows.append(
             {
                 "year": year,
@@ -86,14 +127,17 @@ def _load_from_yfinance(ticker: str) -> HistoricalData:
                 "depreciation": depreciation,
                 "interest_expense": interest_expense,
                 "tax_rate": min(max(tax_rate, 0.0), 0.45),
-                "cash": get(bs_df, "Cash And Cash Equivalents"),
-                "accounts_receivable": get(bs_df, "Accounts Receivable"),
-                "inventory": get(bs_df, "Inventory"),
-                "accounts_payable": get(bs_df, "Accounts Payable"),
-                "ppne": get(bs_df, "Net PPE"),
-                "debt": get(bs_df, "Total Debt"),
-                "shares_outstanding": get(bs_df, "Ordinary Shares Number", default=1.0),
+                "cash": cash,
+                "accounts_receivable": ar,
+                "inventory": inventory,
+                "accounts_payable": ap,
+                "ppne": ppne,
+                "debt": debt,
+                "shares_outstanding": max(shares, 1.0),
                 "capex": abs(get(cf_df, "Capital Expenditure")),
+                "equity": equity,
+                "other_assets": other_assets,
+                "other_liabilities": other_liabilities,
             }
         )
 
