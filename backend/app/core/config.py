@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field
 from pydantic.field_validator import field_validator
@@ -35,6 +36,21 @@ class Settings(BaseSettings):
                 return json.loads(raw)
             return [item.strip() for item in raw.split(",") if item.strip()]
         return value
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+
+        raw = value.strip()
+        if raw.startswith("postgresql://"):
+            parts = urlsplit(raw)
+            return urlunsplit(("postgresql+psycopg", parts.netloc, parts.path, parts.query, parts.fragment))
+        if raw.startswith("postgres://"):
+            parts = urlsplit(raw)
+            return urlunsplit(("postgresql+psycopg", parts.netloc, parts.path, parts.query, parts.fragment))
+        return raw
 
 
 settings = Settings()
