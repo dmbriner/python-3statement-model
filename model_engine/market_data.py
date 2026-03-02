@@ -14,6 +14,10 @@ FMP_V4_BASE_URL = "https://financialmodelingprep.com/api/v4"
 AV_BASE_URL = "https://www.alphavantage.co/query"
 DEFAULT_TIMEOUT = 8
 
+# Fallback API key — works for local dev without a secrets file.
+# For production (Streamlit Cloud), set ALPHA_VANTAGE_API_KEY in the secrets dashboard.
+_AV_KEY_FALLBACK = "YT27T5XESP3OERHI"
+
 
 @dataclass(frozen=True)
 class CompanySearchResult:
@@ -120,7 +124,7 @@ def fmp_enabled() -> bool:
 
 
 def alpha_vantage_api_key() -> str | None:
-    return os.getenv("ALPHA_VANTAGE_API_KEY")
+    return os.getenv("ALPHA_VANTAGE_API_KEY") or _AV_KEY_FALLBACK
 
 
 def _av_search(query: str, limit: int = 8) -> list[CompanySearchResult]:

@@ -65,6 +65,7 @@ SLIDER_DEFAULTS: dict[str, float | int] = {
 APP_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
 :root {
     --bg: #f0f4f8;
@@ -242,12 +243,21 @@ h1, h2, h3, h4 {
 }
 
 .landing-icon {
-    font-size: 0.9rem;
-    color: var(--gold);
     margin-bottom: 0.55rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-family: 'Lora', Georgia, serif;
+}
+
+.landing-icon .material-icons {
+    font-size: 2rem;
+    color: var(--gold);
+    display: block;
+    font-family: 'Material Icons';
+    font-weight: normal;
+    font-style: normal;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    -webkit-font-feature-settings: 'liga';
+    font-feature-settings: 'liga';
 }
 
 .landing-title {
@@ -724,17 +734,17 @@ def _render_welcome() -> None:
         """
         <div class="landing-grid" style="max-width:900px; margin: 1.5rem auto 0;">
             <div class="landing-card">
-                <div class="landing-icon">Research</div>
+                <div class="landing-icon"><span class="material-icons">analytics</span></div>
                 <div class="landing-title">Market Data</div>
                 <div class="landing-copy">Live peer comps, analyst price targets, earnings history, and precedent M&amp;A headlines pulled from the API.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">Model</div>
+                <div class="landing-icon"><span class="material-icons">table_chart</span></div>
                 <div class="landing-title">3-Statement Forecast</div>
                 <div class="landing-copy">Annual and quarterly history auto-seeds a linked income statement, balance sheet, and cash flow — Base, Bull, and Bear.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">Value</div>
+                <div class="landing-icon"><span class="material-icons">price_check</span></div>
                 <div class="landing-title">4-Method Valuation</div>
                 <div class="landing-copy">DCF, trading comps, precedent transactions, and LBO outputs displayed side by side for a complete valuation range.</div>
             </div>
@@ -759,17 +769,17 @@ def tab_home(hist: HistoricalData) -> None:
         f"""
         <div class="landing-grid">
             <div class="landing-card">
-                <div class="landing-icon">Research</div>
+                <div class="landing-icon"><span class="material-icons">analytics</span></div>
                 <div class="landing-title">Market Data</div>
                 <div class="landing-copy">Live peer comps, analyst price targets, earnings history, and precedent M&amp;A headlines pulled directly from the API for {name}.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">Model</div>
+                <div class="landing-icon"><span class="material-icons">table_chart</span></div>
                 <div class="landing-title">3-Statement Forecast</div>
                 <div class="landing-copy">Historical financials auto-seed a linked income statement, balance sheet, and cash flow across Base, Bull, and Bear scenarios.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">Value</div>
+                <div class="landing-icon"><span class="material-icons">price_check</span></div>
                 <div class="landing-title">4-Method Valuation</div>
                 <div class="landing-copy">DCF, trading comps, precedent transactions, and LBO outputs displayed side by side for a complete valuation range.</div>
             </div>
