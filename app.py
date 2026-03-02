@@ -67,31 +67,35 @@ APP_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
 
 :root {
-    --bg: #f5f0e8;
-    --panel: rgba(255, 253, 248, 0.90);
-    --panel-strong: rgba(255, 253, 248, 0.98);
-    --ink: #1a1a2e;
-    --muted: #5c6370;
-    --line: rgba(26, 26, 46, 0.09);
+    --bg: #f0f4f8;
+    --panel: #ffffff;
+    --panel-strong: #ffffff;
+    --ink: #0f172a;
+    --muted: #4e5d6c;
+    --line: #dde3ec;
     --accent: #0f4c81;
-    --accent-2: #9a7b5a;
-    --success: #2d5a3d;
-    --danger: #8b2e1f;
+    --accent-hover: #0a3764;
+    --gold: #b58a38;
+    --success: #15803d;
+    --danger: #b91c1c;
+    --sidebar-bg: #ffffff;
 }
 
 .stApp {
     font-family: 'Lora', Georgia, serif;
     color: var(--ink);
-    background:
-        radial-gradient(ellipse at top left, rgba(154, 123, 90, 0.16), transparent 30%),
-        radial-gradient(ellipse at 90% 8%, rgba(15, 76, 129, 0.11), transparent 28%),
-        linear-gradient(170deg, #f8f2e8 0%, #ede4d3 55%, #e8dcc8 100%);
+    background: #f0f4f8;
 }
 
 h1, h2, h3, h4 {
     font-family: 'Playfair Display', Georgia, serif;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+
+[data-testid="stSidebar"] {
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--line);
 }
 
 [data-testid="stSidebar"] * {
@@ -99,111 +103,144 @@ h1, h2, h3, h4 {
 }
 
 .block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 3rem;
+    padding-top: 1.4rem;
+    padding-bottom: 4rem;
+    max-width: 1240px;
 }
 
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, rgba(255,253,248,0.97) 0%, rgba(245,240,232,0.99) 100%);
-    border-right: 1px solid var(--line);
-}
-
-[data-testid="metric-container"],
-.panel-card {
+/* ── Metrics ── */
+[data-testid="metric-container"] {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 12px 16px;
-    box-shadow: 0 8px 24px rgba(26, 26, 46, 0.06);
-    backdrop-filter: blur(6px);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
 
+/* ── Buttons ── */
+.stButton > button {
+    font-family: 'Lora', Georgia, serif;
+    font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    padding: 0.42rem 1rem;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.stButton > button:hover {
+    background: #e8edf4;
+    border-color: #b0bec8;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+    background: var(--accent);
+    color: #ffffff;
+    border-color: var(--accent);
+}
+
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="baseButton-primary"]:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    box-shadow: 0 4px 14px rgba(15, 76, 129, 0.25);
+}
+
+.stDownloadButton > button {
+    font-family: 'Lora', Georgia, serif;
+    background: var(--success);
+    color: #ffffff;
+    border: 1px solid var(--success);
+    border-radius: 8px;
+    font-weight: 500;
+    padding: 0.42rem 1rem;
+    transition: background 0.15s, box-shadow 0.15s;
+}
+
+.stDownloadButton > button:hover {
+    background: #126832;
+    border-color: #126832;
+    box-shadow: 0 4px 14px rgba(21, 128, 61, 0.25);
+}
+
+/* ── Hero ── */
 .hero-card {
-    padding: 1.4rem 1.6rem;
-    border-radius: 16px;
-    background:
-        linear-gradient(140deg, rgba(10,42,74,0.94) 0%, rgba(26,58,94,0.88) 55%, rgba(90,60,35,0.82) 100%);
-    color: white;
-    border: 1px solid rgba(255,255,255,0.12);
-    margin-bottom: 1.2rem;
-    box-shadow: 0 16px 48px rgba(10, 42, 74, 0.22);
+    padding: 1.6rem 1.8rem;
+    border-radius: 14px;
+    background: linear-gradient(130deg, #0f172a 0%, #0f4c81 65%, #1a5a9a 100%);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 1.4rem;
+    box-shadow: 0 8px 32px rgba(15, 23, 42, 0.18);
+}
+
+.hero-name {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.15;
+    margin-top: 0.3rem;
 }
 
 .hero-subtle {
-    opacity: 0.82;
+    opacity: 0.78;
     margin-top: 0.4rem;
-    font-family: 'Lora', Georgia, serif;
-    font-size: 0.98rem;
+    font-size: 0.95rem;
+    letter-spacing: 0.01em;
 }
 
+/* ── Glossary pills ── */
 .glossary-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
-    margin: 0.45rem 0 1rem 0;
+    gap: 0.4rem;
+    margin: 0.4rem 0 1rem 0;
 }
 
 .glossary-pill {
     display: inline-flex;
     align-items: center;
-    padding: 0.38rem 0.72rem;
-    border-radius: 6px;
-    background: rgba(255,253,248,0.95);
-    border: 1px solid rgba(15,76,129,0.18);
+    padding: 0.3rem 0.65rem;
+    border-radius: 5px;
+    background: #e8edf4;
+    border: 1px solid #c5d0dc;
     color: var(--accent);
-    font-family: 'Lora', Georgia, serif;
-    font-size: 0.88rem;
+    font-size: 0.84rem;
     cursor: help;
-    letter-spacing: 0.01em;
-}
-
-.search-result {
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 0.45rem 0.6rem;
-    background: var(--panel-strong);
-    margin-bottom: 0.4rem;
-}
-
-.section-note {
-    color: var(--muted);
-    font-size: 0.95rem;
-    font-style: italic;
-}
-
-.small-label {
     font-family: 'Lora', Georgia, serif;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    font-size: 0.68rem;
-    opacity: 0.75;
 }
 
+/* ── Landing cards ── */
 .landing-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1rem;
-    margin: 1rem 0 1.2rem 0;
+    margin: 1.2rem 0 1.4rem 0;
 }
 
 .landing-card {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 1.2rem 1.1rem;
-    box-shadow: 0 8px 24px rgba(26, 26, 46, 0.05);
+    border-radius: 12px;
+    padding: 1.3rem 1.2rem;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 }
 
 .landing-icon {
-    font-size: 1.1rem;
-    color: var(--accent);
-    margin-bottom: 0.5rem;
-    font-style: normal;
+    font-size: 0.9rem;
+    color: var(--gold);
+    margin-bottom: 0.55rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-family: 'Lora', Georgia, serif;
 }
 
 .landing-title {
     font-family: 'Playfair Display', Georgia, serif;
-    font-size: 1.05rem;
+    font-size: 1.1rem;
     font-weight: 600;
     margin-bottom: 0.4rem;
     color: var(--ink);
@@ -211,29 +248,60 @@ h1, h2, h3, h4 {
 
 .landing-copy {
     color: var(--muted);
-    line-height: 1.5;
+    line-height: 1.55;
+    font-size: 0.93rem;
+}
+
+/* ── Welcome screen ── */
+.welcome-hero {
+    max-width: 680px;
+    margin: 4rem auto 0;
+    text-align: center;
+    padding: 0 1rem;
+}
+
+.welcome-hero h1 {
+    font-size: 2.6rem;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+}
+
+.welcome-hero p {
+    color: var(--muted);
+    font-size: 1.05rem;
+    line-height: 1.6;
+    margin-bottom: 1.8rem;
+}
+
+/* ── Misc ── */
+.small-label {
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    opacity: 0.7;
+    font-family: 'Lora', Georgia, serif;
+}
+
+.section-note {
+    color: var(--muted);
     font-size: 0.94rem;
+    font-style: italic;
 }
 
 .site-footer {
     text-align: center;
-    padding: 2rem 1rem 1.5rem;
+    padding: 2.5rem 1rem 1.5rem;
     margin-top: 3rem;
     border-top: 1px solid var(--line);
     color: var(--muted);
-    font-size: 0.88rem;
+    font-size: 0.86rem;
     font-style: italic;
 }
 
 .site-footer a {
     color: var(--accent);
     text-decoration: none;
-    border-bottom: 1px solid rgba(15, 76, 129, 0.35);
-    transition: border-color 0.2s;
-}
-
-.site-footer a:hover {
-    border-color: var(--accent);
+    border-bottom: 1px solid rgba(15, 76, 129, 0.3);
 }
 </style>
 """
@@ -292,8 +360,8 @@ def _init_session_state() -> None:
     for key, val in SLIDER_DEFAULTS.items():
         st.session_state.setdefault(key, val)
     st.session_state.setdefault("metrics", None)
-    st.session_state.setdefault("selected_ticker", "UPS")
-    st.session_state.setdefault("search_query", "UPS")
+    st.session_state.setdefault("selected_ticker", "")
+    st.session_state.setdefault("search_query", "")
     st.session_state.setdefault("reporting_view", "Full Year")
     st.session_state.setdefault("is_authenticated", False)
 
@@ -391,7 +459,7 @@ def _base_layout(height: int = 370) -> dict:
         "margin": dict(l=18, r=18, t=52, b=18),
         "plot_bgcolor": "rgba(255,255,255,0.72)",
         "paper_bgcolor": "rgba(0,0,0,0)",
-        "font": dict(family="Source Sans 3, sans-serif", color="#1f2933"),
+        "font": dict(family="Lora, Georgia, serif", color="#0f172a"),
     }
 
 
@@ -454,8 +522,8 @@ def _hero(profile_name: str | None, ticker: str, hist: HistoricalData) -> None:
     st.markdown(
         f"""
         <div class="hero-card">
-            <div class="small-label">3-Statement Modeling Workspace</div>
-            <div style="font-size: 2rem; font-weight: 700;">{name} <span style="opacity: 0.8;">({ticker})</span></div>
+            <div class="small-label">Equity Research &amp; Forecasting Platform</div>
+            <div class="hero-name">{name} <span style="opacity:0.65; font-weight:400;">({ticker})</span></div>
             <div class="hero-subtle">{subtitle}</div>
         </div>
         """,
@@ -490,8 +558,8 @@ def _auth_gate() -> bool:
         """
         <div class="hero-card">
             <div class="small-label">Private Access</div>
-            <div style="font-size: 2rem; font-weight: 700;">Research Platform Access</div>
-            <div class="hero-subtle">This deployment is protected. Enter the access password to continue.</div>
+            <div class="hero-name">Research Platform</div>
+            <div class="hero-subtle">This deployment is access-restricted. Enter the password to continue.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -507,14 +575,14 @@ def _auth_gate() -> bool:
 
 def _sidebar_search() -> tuple[str, bytes | None, bool]:
     with st.sidebar:
-        st.markdown("## Platform")
-        st.caption("Public-facing equity research, forecasting, and valuation workspace")
+        st.markdown("## Equity Research")
+        st.caption("Search any public company to load live data and begin modeling.")
         if _access_password():
             state = "Unlocked" if st.session_state.get("is_authenticated") else "Locked"
-            st.caption(f"Access state: {state}")
+            st.caption(f"Access: {state}")
         st.divider()
-        st.markdown("## Company Search")
-        st.caption("Search by company name or ticker. Select a result to load its ticker and logo.")
+        st.markdown("### Company Search")
+        st.caption("Type a name or ticker. Click Use to select.")
         query = st.text_input("Search", key="search_query")
 
         if len(query.strip()) >= 1:
@@ -540,7 +608,7 @@ def _sidebar_search() -> tuple[str, bytes | None, bool]:
                     st.session_state["search_query"] = result.symbol
 
         st.divider()
-        ticker = st.text_input("Selected ticker", value=st.session_state.get("selected_ticker", "UPS")).upper()
+        ticker = st.text_input("Selected ticker", value=st.session_state.get("selected_ticker", ""), placeholder="e.g. AAPL, MSFT, NVDA").upper()
         st.session_state["selected_ticker"] = ticker
 
         uploaded = st.file_uploader(
@@ -579,35 +647,73 @@ def _sidebar_search() -> tuple[str, bytes | None, bool]:
     return ticker, csv_bytes, analyze_clicked
 
 
-def tab_home(hist: HistoricalData) -> None:
-    name = hist.profile.name if hist.profile else hist.ticker
+def _render_welcome() -> None:
+    """Full-page welcome shown when no ticker is loaded yet."""
     st.markdown(
-        f"""
-        <div class="hero-card">
-            <div class="small-label">Public Product Surface</div>
-            <div style="font-size: 2.2rem; font-weight: 700;">Institutional-style research for {name}</div>
-            <div class="hero-subtle">A single website for historical analysis, forecasting, peer work, and valuation.</div>
+        """
+        <div class="welcome-hero">
+            <h1>Institutional-Grade Equity Research</h1>
+            <p>
+                Search any public company to load live financial statements, build a
+                linked 3-statement model, run scenario and sensitivity analysis, and
+                value the business across four methods — all in one workspace.
+            </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown(
         """
+        <div class="landing-grid" style="max-width:900px; margin: 1.5rem auto 0;">
+            <div class="landing-card">
+                <div class="landing-icon">Research</div>
+                <div class="landing-title">Market Data</div>
+                <div class="landing-copy">Live peer comps, analyst price targets, earnings history, and precedent M&amp;A headlines pulled from the API.</div>
+            </div>
+            <div class="landing-card">
+                <div class="landing-icon">Model</div>
+                <div class="landing-title">3-Statement Forecast</div>
+                <div class="landing-copy">Annual and quarterly history auto-seeds a linked income statement, balance sheet, and cash flow — Base, Bull, and Bear.</div>
+            </div>
+            <div class="landing-card">
+                <div class="landing-icon">Value</div>
+                <div class="landing-title">4-Method Valuation</div>
+                <div class="landing-copy">DCF, trading comps, precedent transactions, and LBO outputs displayed side by side for a complete valuation range.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="site-footer">
+            Built by <a href="https://dmbriner.github.io/" target="_blank" rel="noopener noreferrer">Dana Briner</a>
+            &nbsp;&middot;&nbsp; Equity research &amp; forecasting platform
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def tab_home(hist: HistoricalData) -> None:
+    name = hist.profile.name if hist.profile else hist.ticker
+    st.markdown(
+        f"""
         <div class="landing-grid">
             <div class="landing-card">
-                <div class="landing-icon">&#9670;</div>
-                <div class="landing-title">Research</div>
-                <div class="landing-copy">Peer comps, analyst targets, earnings history, and precedent headlines feed directly into the modeling workflow.</div>
+                <div class="landing-icon">Research</div>
+                <div class="landing-title">Market Data</div>
+                <div class="landing-copy">Live peer comps, analyst price targets, earnings history, and precedent M&amp;A headlines pulled directly from the API for {name}.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">&#9670;</div>
-                <div class="landing-title">Forecasting</div>
-                <div class="landing-copy">Annual and quarterly history flows into a linked 3-statement model with scenario analysis and driver-based assumptions.</div>
+                <div class="landing-icon">Model</div>
+                <div class="landing-title">3-Statement Forecast</div>
+                <div class="landing-copy">Historical financials auto-seed a linked income statement, balance sheet, and cash flow across Base, Bull, and Bear scenarios.</div>
             </div>
             <div class="landing-card">
-                <div class="landing-icon">&#9670;</div>
-                <div class="landing-title">Valuation</div>
-                <div class="landing-copy">DCF, trading comps, precedents, and LBO outputs sit side by side so the valuation range is visible in one place.</div>
+                <div class="landing-icon">Value</div>
+                <div class="landing-title">4-Method Valuation</div>
+                <div class="landing-copy">DCF, trading comps, precedent transactions, and LBO outputs displayed side by side for a complete valuation range.</div>
             </div>
         </div>
         """,
@@ -617,16 +723,7 @@ def tab_home(hist: HistoricalData) -> None:
     c1.metric("Historical Views", "Annual + Quarterly")
     c2.metric("Valuation Methods", "4")
     c3.metric("Research Mode", "API-backed" if fmp_enabled() else "Ready")
-    c4.metric("Deployment", "Cloud-ready")
-    with st.expander("Website Positioning", expanded=False):
-        st.write(
-            "This app is now structured to work as a real website, not only a local notebook-style dashboard. "
-            "It has a landing surface, an optional access gate, public deployment config, and a broad workflow from search to valuation."
-        )
-        st.write(
-            "If you want a stronger product feel next, the natural follow-up is a dedicated branded homepage, custom domain, "
-            "authentication provider, and saved user workspaces."
-        )
+    c4.metric("Export", "Excel")
 
 
 def tab_overview(hist: HistoricalData, ticker: str) -> None:
@@ -1279,11 +1376,16 @@ def main() -> None:
         return
 
     ticker, csv_bytes, analyze_clicked = _sidebar_search()
+
+    if not ticker and not csv_bytes:
+        _render_welcome()
+        return
+
     try:
         hist = _load_data(ticker, csv_bytes)
     except Exception as exc:
         st.error(f"Could not load data for {ticker}: {exc}")
-        st.info("Try a different ticker, or upload a CSV.")
+        st.info("Try a different ticker or upload a CSV.")
         return
 
     if analyze_clicked:
