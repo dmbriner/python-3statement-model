@@ -34,6 +34,10 @@ OPTIONAL_COLUMNS = [
     "fiscal_quarter",
 ]
 
+YFINANCE_SYMBOL_REPLACEMENTS = {
+    ".": "-",
+}
+
 
 @dataclass
 class HistoricalData:
@@ -82,13 +86,41 @@ def reporting_frame(hist: HistoricalData, frequency: str) -> tuple[pd.DataFrame,
 def _load_from_csv(csv_path: str | Path, ticker: str) -> HistoricalData:
     df = pd.read_csv(csv_path)
     validated = _validate_historical_df(df)
-    return HistoricalData(ticker=ticker, df=validated, annual_df=validated, quarterly_df=pd.DataFrame())
+    normalized = _normalize_input_ticker(ticker)
+    return HistoricalData(ticker=normalized, df=validated, annual_df=validated, quarterly_df=pd.DataFrame())
 
 
-def _statement_value(df: pd.DataFrame, dt, key: str, default: float = 0.0) -> float:
-    if key in df.columns and pd.notna(df.loc[dt, key]):
-        return float(df.loc[dt, key])
+def _normalize_input_ticker(ticker: str) -> str:
+    return ticker.strip().upper()
+
+
+def _provider_symbol(ticker: str, provider: str) -> str:
+    normalized = _normalize_input_ticker(ticker)
+    if provider == "yfinance":
+        for old, new in YFINANCE_SYMBOL_REPLACEMENTS.items():
+            normalized = normalized.replace(old, new)
+    return normalized
+
+
+def _statement_value(df: pd.DataFrame, dt, key: str | list[str] | tuple[str, ...], default: float = 0.0) -> float:
+    keys = [key] if isinstance(key, str) else list(key)
+    for candidate in keys:
+        if candidate in df.columns and pd.notna(df.loc[dt, candidate]):
+            return float(df.loc[dt, candidate])
     return default
+
+
+def _statement_frame(ticker_obj, annual_names: list[str], quarterly_names: list[str] | None = None) -> pd.DataFrame:
+    for attr in annual_names:
+        frame = getattr(ticker_obj, attr, pd.DataFrame())
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            return frame.T
+    if quarterly_names:
+        for attr in quarterly_names:
+            frame = getattr(ticker_obj, attr, pd.DataFrame())
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                return frame.T
+    return pd.DataFrame()
 
 
 def _build_statement_rows(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.DataFrame, period_type: str) -> pd.DataFrame:
@@ -103,27 +135,82 @@ def _build_statement_rows(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.Da
     period_index = is_df.index.intersection(bs_df.index).intersection(cf_df.index)
 
     for dt in sorted(period_index):
-        revenue = _statement_value(is_df, dt, "Total Revenue") / M
+        revenue = _statement_value(
+            is_df,
+            dt,
+            [
+                "Total Revenue",
+                "Operating Revenue",
+                "Revenue",
+                "Net Sales",
+                "Sales Revenue",
+            ],
+        ) / M
         if revenue <= 0:
             continue
 
-        cogs = abs(_statement_value(is_df, dt, "Cost Of Revenue")) / M
-        opex = abs(_statement_value(is_df, dt, "Operating Expense")) / M
-        depreciation = abs(_statement_value(cf_df, dt, "Depreciation And Amortization")) / M
-        interest_expense = abs(_statement_value(is_df, dt, "Interest Expense")) / M
-        pretax_income = _statement_value(is_df, dt, "Pretax Income") / M
-        tax_expense = abs(_statement_value(is_df, dt, "Tax Provision")) / M
+        cogs = abs(_statement_value(is_df, dt, ["Cost Of Revenue", "Cost of Revenue", "Cost Of Goods Sold"])) / M
+        opex = abs(
+            _statement_value(
+                is_df,
+                dt,
+                [
+                    "Operating Expense",
+                    "Operating Expenses",
+                    "Selling General And Administration",
+                    "Selling General Administrative",
+                ],
+            )
+        ) / M
+        depreciation = abs(
+            _statement_value(
+                cf_df,
+                dt,
+                [
+                    "Depreciation And Amortization",
+                    "Depreciation Amortization Depletion",
+                    "Depreciation",
+                ],
+            )
+        ) / M
+        interest_expense = abs(
+            _statement_value(
+                is_df,
+                dt,
+                ["Interest Expense", "Net Interest Income", "Interest Expense Non Operating"],
+            )
+        ) / M
+        pretax_income = _statement_value(is_df, dt, ["Pretax Income", "Pre Tax Income", "Income Before Tax"]) / M
+        tax_expense = abs(_statement_value(is_df, dt, ["Tax Provision", "Tax Rate For Calcs", "Income Tax Expense"])) / M
         tax_rate = (tax_expense / pretax_income) if pretax_income else 0.24
 
-        cash = _statement_value(bs_df, dt, "Cash And Cash Equivalents") / M
-        ar = _statement_value(bs_df, dt, "Accounts Receivable") / M
-        inventory = _statement_value(bs_df, dt, "Inventory") / M
-        ap = _statement_value(bs_df, dt, "Accounts Payable") / M
-        ppne = _statement_value(bs_df, dt, "Net PPE") / M
-        debt = _statement_value(bs_df, dt, "Total Debt") / M
+        cash = _statement_value(
+            bs_df,
+            dt,
+            [
+                "Cash And Cash Equivalents",
+                "Cash Cash Equivalents And Short Term Investments",
+                "Cash",
+            ],
+        ) / M
+        ar = _statement_value(bs_df, dt, ["Accounts Receivable", "Receivables", "Net Receivables"]) / M
+        inventory = _statement_value(bs_df, dt, ["Inventory", "Inventories"]) / M
+        ap = _statement_value(bs_df, dt, ["Accounts Payable", "Payables And Accrued Expenses"]) / M
+        ppne = _statement_value(bs_df, dt, ["Net PPE", "Property Plant Equipment Net", "Gross PPE"]) / M
+        debt = _statement_value(bs_df, dt, ["Total Debt", "Net Debt", "Total Capitalization"]) / M
+        if debt <= 0:
+            debt = (
+                _statement_value(bs_df, dt, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"])
+                + _statement_value(bs_df, dt, ["Current Debt", "Current Debt And Capital Lease Obligation", "Short Long Term Debt"])
+            ) / M
 
         # Shares: yfinance returns actual share count; divide by M to get millions
-        shares_raw = _statement_value(bs_df, dt, "Ordinary Shares Number", default=M)
+        shares_raw = _statement_value(
+            bs_df,
+            dt,
+            ["Ordinary Shares Number", "Share Issued", "Common Stock Shares Outstanding"],
+            default=M,
+        )
         shares = max(shares_raw / M, 1.0)
 
         # Equity — try multiple yfinance field names
@@ -131,17 +218,30 @@ def _build_statement_rows(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.Da
             _statement_value(bs_df, dt, "Stockholders Equity")
             or _statement_value(bs_df, dt, "Common Stock Equity")
             or _statement_value(bs_df, dt, "Total Equity Gross Minority Interest")
+            or _statement_value(bs_df, dt, "Total Equity")
             or 0.0
         )
         equity = equity_raw / M
 
-        total_assets = _statement_value(bs_df, dt, "Total Assets") / M
+        total_assets = _statement_value(bs_df, dt, ["Total Assets", "Assets"]) / M
         total_liab_raw = (
             _statement_value(bs_df, dt, "Total Liabilities Net Minority Interest")
             or _statement_value(bs_df, dt, "Total Liabilities")
+            or _statement_value(bs_df, dt, "Liabilities")
             or 0.0
         )
         total_liab = total_liab_raw / M
+
+        if cogs == 0:
+            gross_profit = _statement_value(is_df, dt, ["Gross Profit", "GrossProfit"]) / M
+            if gross_profit > 0:
+                cogs = max(revenue - gross_profit, 0.0)
+
+        if opex == 0:
+            operating_income = _statement_value(is_df, dt, ["Operating Income", "Operating Income Or Loss"]) / M
+            gross_profit = max(revenue - cogs, 0.0)
+            if gross_profit > 0 and operating_income != 0:
+                opex = max(gross_profit - operating_income, 0.0)
 
         explicit_assets = cash + ar + inventory + ppne
         explicit_liab = debt + ap
@@ -175,7 +275,18 @@ def _build_statement_rows(is_df: pd.DataFrame, bs_df: pd.DataFrame, cf_df: pd.Da
                 "ppne": ppne,
                 "debt": debt,
                 "shares_outstanding": shares,
-                "capex": abs(_statement_value(cf_df, dt, "Capital Expenditure")) / M,
+                "capex": abs(
+                    _statement_value(
+                        cf_df,
+                        dt,
+                        [
+                            "Capital Expenditure",
+                            "Capital Expenditure Reported",
+                            "Purchase Of PPE",
+                            "Investments In Property Plant And Equipment",
+                        ],
+                    )
+                ) / M,
                 "equity": equity,
                 "other_assets": other_assets,
                 "other_liabilities": other_liabilities,
@@ -192,10 +303,10 @@ def _load_quarterly_from_yfinance(ticker: str) -> pd.DataFrame:
     """Attempt to load quarterly data from yfinance. Returns empty DataFrame on failure."""
     try:
         import yfinance as yf
-        tk = yf.Ticker(ticker)
-        q_is = tk.quarterly_financials.T
-        q_bs = tk.quarterly_balance_sheet.T
-        q_cf = tk.quarterly_cashflow.T
+        tk = yf.Ticker(_provider_symbol(ticker, "yfinance"))
+        q_is = _statement_frame(tk, ["quarterly_income_stmt", "quarterly_financials"])
+        q_bs = _statement_frame(tk, ["quarterly_balance_sheet"])
+        q_cf = _statement_frame(tk, ["quarterly_cashflow"])
         if q_is.empty or q_bs.empty or q_cf.empty:
             return pd.DataFrame()
         qdf = _build_statement_rows(q_is, q_bs, q_cf, period_type="quarterly")
@@ -209,16 +320,17 @@ def _load_quarterly_from_yfinance(ticker: str) -> pd.DataFrame:
 def _load_from_yfinance(ticker: str) -> HistoricalData:
     import yfinance as yf
 
-    tk = yf.Ticker(ticker)
-    annual_is = tk.financials.T
-    annual_bs = tk.balance_sheet.T
-    annual_cf = tk.cashflow.T
-    quarterly_is = tk.quarterly_financials.T
-    quarterly_bs = tk.quarterly_balance_sheet.T
-    quarterly_cf = tk.quarterly_cashflow.T
+    normalized = _normalize_input_ticker(ticker)
+    tk = yf.Ticker(_provider_symbol(normalized, "yfinance"))
+    annual_is = _statement_frame(tk, ["income_stmt", "financials"])
+    annual_bs = _statement_frame(tk, ["balance_sheet"])
+    annual_cf = _statement_frame(tk, ["cashflow"])
+    quarterly_is = _statement_frame(tk, ["quarterly_income_stmt", "quarterly_financials"])
+    quarterly_bs = _statement_frame(tk, ["quarterly_balance_sheet"])
+    quarterly_cf = _statement_frame(tk, ["quarterly_cashflow"])
 
     if annual_is.empty or annual_bs.empty or annual_cf.empty:
-        raise ValueError(f"Could not fetch complete annual financial statements for {ticker}")
+        raise ValueError(f"Could not fetch complete annual financial statements for {normalized}")
 
     annual_df = _build_statement_rows(annual_is, annual_bs, annual_cf, period_type="annual")
     quarterly_df = _build_statement_rows(quarterly_is, quarterly_bs, quarterly_cf, period_type="quarterly")
@@ -236,7 +348,7 @@ def _load_from_yfinance(ticker: str) -> HistoricalData:
         pass
 
     return HistoricalData(
-        ticker=ticker,
+        ticker=normalized,
         df=annual_df,
         annual_df=annual_df,
         quarterly_df=quarterly_df,
@@ -253,32 +365,33 @@ def load_historical_data(ticker: str, csv_path: str | Path | None = None) -> His
 
     All values returned in $M; shares outstanding in millions of shares.
     """
+    normalized = _normalize_input_ticker(ticker)
     if csv_path:
-        return _load_from_csv(csv_path, ticker=ticker)
+        return _load_from_csv(csv_path, ticker=normalized)
 
     # ── Primary: SEC EDGAR ──────────────────────────────────────────
     try:
         from .edgar import load_from_edgar
 
-        annual_df, entity_name, _ = load_from_edgar(ticker)
+        annual_df, entity_name, _ = load_from_edgar(normalized)
         annual_df = _validate_historical_df(annual_df)
 
         # Supplement with quarterly data from yfinance (EDGAR quarterly parsing is complex)
-        quarterly_df = _load_quarterly_from_yfinance(ticker)
+        quarterly_df = _load_quarterly_from_yfinance(normalized)
 
         # Market data profile (price, market cap, etc.) from market_data module
         profile: CompanyProfile | None = None
         try:
-            profile = resolve_company_profile(ticker)
+            profile = resolve_company_profile(_provider_symbol(normalized, "yfinance"))
         except Exception:
             pass
 
         # If market_data failed, build a minimal profile from the EDGAR entity name
         if profile is None:
-            profile = CompanyProfile(symbol=ticker.upper(), name=entity_name)
+            profile = CompanyProfile(symbol=normalized, name=entity_name)
 
         return HistoricalData(
-            ticker=ticker,
+            ticker=normalized,
             df=annual_df,
             annual_df=annual_df,
             quarterly_df=quarterly_df,
@@ -288,4 +401,4 @@ def load_historical_data(ticker: str, csv_path: str | Path | None = None) -> His
         pass
 
     # ── Fallback: yfinance ──────────────────────────────────────────
-    return _load_from_yfinance(ticker)
+    return _load_from_yfinance(normalized)

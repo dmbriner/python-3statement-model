@@ -7,6 +7,7 @@ import dataclasses
 import io
 import json
 import os
+from collections.abc import Mapping
 
 import pandas as pd
 import plotly.express as px
@@ -23,7 +24,9 @@ from model_engine import (
     build_research_pack,
     build_multi_output_sensitivity,
     build_tornado_chart,
+    clear_api_credentials,
     check_integrity,
+    current_api_credentials,
     fmp_enabled,
     format_line_item_label,
     load_historical_data,
@@ -34,6 +37,7 @@ from model_engine import (
     run_precedent_transactions,
     run_three_statement_model,
     search_companies,
+    set_api_credentials,
     suggest_scenarios,
     valuation_summary_table,
     wacc_terminal_sensitivity,
@@ -389,6 +393,95 @@ def _format_display_df(df: pd.DataFrame, pct_cols: set[str] | None = None, per_s
     return _format_title_case(out)
 
 
+def _display_value(value, kind: str = "text") -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    if kind == "money":
+        return f"${float(value):,.2f}"
+    if kind == "millions":
+        return _fm(float(value) / 1_000_000)
+    if kind == "multiple":
+        return f"{float(value):.1f}x"
+    return str(value)
+
+
+def _kv_table(rows: list[tuple[str, str]]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["Field", "Value"])
+
+
+def _profile_export_frame(hist: HistoricalData) -> pd.DataFrame:
+    profile = hist.profile
+    rows = [
+        ("Ticker", hist.ticker),
+        ("Company", profile.name if profile else hist.ticker),
+        ("Exchange", profile.exchange if profile else ""),
+        ("Quote Type", profile.quote_type if profile else ""),
+        ("Sector", profile.sector if profile else ""),
+        ("Industry", profile.industry if profile else ""),
+        ("Currency", profile.currency if profile else ""),
+        ("Website", profile.website if profile else ""),
+        ("Current Price", _display_value(profile.current_price if profile else None, "money")),
+        ("Market Cap", _display_value(profile.market_cap if profile else None, "millions")),
+        ("Enterprise Value", _display_value(profile.enterprise_value if profile else None, "millions")),
+        ("Shares Outstanding", f"{(profile.shares_outstanding or 0) / 1_000_000:,.0f}M" if profile and profile.shares_outstanding else "—"),
+    ]
+    return _kv_table(rows)
+
+
+def _research_export_sheets(hist: HistoricalData, research, base_asm: ModelAssumptions) -> dict[str, pd.DataFrame]:
+    sheets: dict[str, pd.DataFrame] = {
+        "Profile Summary": _profile_export_frame(hist),
+        "Annual Historical": hist.annual().copy(),
+        "Quarterly Historical": hist.quarterly().copy(),
+        "Assumptions": pd.DataFrame(
+            {
+                "Assumption": [
+                    "Year 1 Revenue Growth",
+                    f"Year {PROJ_YEARS} Revenue Growth",
+                    "Year 1 Gross Margin",
+                    f"Year {PROJ_YEARS} Gross Margin",
+                    "OpEx % Revenue",
+                    "CapEx % Revenue",
+                    "Depreciation % PP&E",
+                    "Tax Rate",
+                    "Interest Rate on Debt",
+                    "Dividend Payout",
+                    "DSO",
+                    "DIO",
+                    "DPO",
+                    "Debt Amortization ($M)",
+                ],
+                "Value": [
+                    _fp(float(st.session_state["growth_y1"])),
+                    _fp(float(st.session_state["growth_yn"])),
+                    _fp(float(st.session_state["gm_y1"])),
+                    _fp(float(st.session_state["gm_yn"])),
+                    _fp(float(st.session_state["opex_pct"])),
+                    _fp(float(st.session_state["capex_pct"])),
+                    _fp(float(st.session_state["dep_pct"])),
+                    _fp(float(st.session_state["tax_rate"])),
+                    _fp(float(st.session_state["int_rate"])),
+                    _fp(float(st.session_state["div_payout"])),
+                    f"{float(st.session_state['dso_days']):.0f}",
+                    f"{float(st.session_state['dio_days']):.0f}",
+                    f"{float(st.session_state['dpo_days']):.0f}",
+                    f"{float(st.session_state['debt_amort']):,.0f}",
+                ],
+            }
+        ),
+    }
+    if research:
+        if research.peers:
+            sheets["Peer Comps"] = pd.DataFrame([peer.__dict__ for peer in research.peers])
+        if research.analyst_snapshot:
+            sheets["Analyst Snapshot"] = pd.DataFrame([research.analyst_snapshot.__dict__])
+        if research.earnings_events:
+            sheets["Earnings"] = pd.DataFrame([event.__dict__ for event in research.earnings_events])
+        if research.precedents:
+            sheets["Precedents"] = pd.DataFrame([event.__dict__ for event in research.precedents])
+    return sheets
+
+
 def _glossary(keys: list[str]) -> None:
     pills = []
     for key in keys:
@@ -409,6 +502,142 @@ def _init_session_state() -> None:
     st.session_state.setdefault("search_query", "")
     st.session_state.setdefault("reporting_view", "Full Year")
     st.session_state.setdefault("is_authenticated", False)
+    st.session_state.setdefault("auth_user", "")
+    st.session_state.setdefault("auth_display_name", "")
+    st.session_state.setdefault("api_profile_id", "")
+
+
+def _secret_mapping(value) -> dict:
+    if isinstance(value, Mapping):
+        return {str(k): value[k] for k in value.keys()}
+    return {}
+
+
+def _provider_key_values(source: Mapping | None) -> dict[str, str]:
+    source = source or {}
+    keys = {}
+    for key in ("ALPHA_VANTAGE_API_KEY", "FMP_API_KEY", "FINANCIAL_MODELING_PREP_API_KEY"):
+        value = source.get(key)
+        if value:
+            keys[key] = str(value)
+    return keys
+
+
+def _configured_api_profiles() -> dict[str, dict]:
+    profiles: dict[str, dict] = {}
+
+    shared = {}
+    try:
+        shared = _provider_key_values(_secret_mapping(st.secrets))
+    except Exception:
+        shared = {}
+    if shared:
+        profiles["shared-default"] = {
+            "label": "Shared Default",
+            "credentials": shared,
+        }
+
+    try:
+        raw_profiles = _secret_mapping(st.secrets.get("api_profiles"))
+    except Exception:
+        raw_profiles = {}
+
+    for profile_id, raw_profile in raw_profiles.items():
+        profile = _secret_mapping(raw_profile)
+        credentials = _provider_key_values(profile)
+        if not credentials:
+            continue
+        profiles[profile_id] = {
+            "label": str(profile.get("label") or profile_id.replace("-", " ").title()),
+            "credentials": credentials,
+        }
+    return profiles
+
+
+def _configured_users() -> dict[str, dict]:
+    users: dict[str, dict] = {}
+    profiles = _configured_api_profiles()
+    profile_ids = list(profiles.keys())
+
+    try:
+        auth_section = _secret_mapping(st.secrets.get("auth"))
+        raw_users = _secret_mapping(auth_section.get("users"))
+    except Exception:
+        raw_users = {}
+
+    for username, raw_user in raw_users.items():
+        user = _secret_mapping(raw_user)
+        password = str(user.get("password") or "").strip()
+        if not password:
+            continue
+        allowed = user.get("allowed_profiles")
+        if isinstance(allowed, list):
+            allowed_profiles = [str(item) for item in allowed if str(item) in profiles]
+        else:
+            allowed_profiles = profile_ids.copy()
+        if not allowed_profiles and profile_ids:
+            allowed_profiles = profile_ids.copy()
+        users[username.lower()] = {
+            "username": username,
+            "password": password,
+            "display_name": str(user.get("display_name") or username),
+            "allowed_profiles": allowed_profiles,
+        }
+
+    legacy_password = os.getenv("APP_ACCESS_PASSWORD")
+    if legacy_password and "guest" not in users:
+        users["guest"] = {
+            "username": "guest",
+            "password": legacy_password,
+            "display_name": "Guest",
+            "allowed_profiles": profile_ids.copy(),
+        }
+
+    return users
+
+
+def _auth_required() -> bool:
+    return bool(_configured_users())
+
+
+def _default_profile_id(allowed_profiles: list[str] | None = None) -> str:
+    profiles = _configured_api_profiles()
+    candidates = allowed_profiles or list(profiles.keys())
+    for profile_id in candidates:
+        if profile_id in profiles:
+            return profile_id
+    return next(iter(profiles), "")
+
+
+def _active_api_profile() -> dict:
+    profiles = _configured_api_profiles()
+    profile_id = st.session_state.get("api_profile_id") or _default_profile_id()
+    return profiles.get(profile_id, {})
+
+
+def _active_api_payload() -> str:
+    profile = _active_api_profile()
+    return json.dumps(profile.get("credentials", {}), sort_keys=True)
+
+
+def _apply_api_payload(payload: str | None) -> None:
+    if not payload:
+        clear_api_credentials()
+        return
+    credentials = json.loads(payload)
+    if credentials:
+        set_api_credentials(**credentials)
+    else:
+        clear_api_credentials()
+
+
+def _logout() -> None:
+    st.session_state["is_authenticated"] = False
+    st.session_state["auth_user"] = ""
+    st.session_state["auth_display_name"] = ""
+    st.session_state["api_profile_id"] = ""
+    clear_api_credentials()
+    st.rerun()
 
 
 def _interp(y1: float, yn: float, n: int = PROJ_YEARS) -> list[float]:
@@ -451,7 +680,8 @@ def _asm_to_json(asm: ModelAssumptions) -> str:
 
 
 @st.cache_data(show_spinner="Loading company data...")
-def _load_data(ticker: str, csv_bytes: bytes | None) -> HistoricalData:
+def _load_data(ticker: str, csv_bytes: bytes | None, api_payload: str) -> HistoricalData:
+    _apply_api_payload(api_payload)
     if csv_bytes:
         hist = load_historical_data(ticker=ticker, csv_path=io.StringIO(csv_bytes.decode()))
     else:
@@ -460,12 +690,14 @@ def _load_data(ticker: str, csv_bytes: bytes | None) -> HistoricalData:
 
 
 @st.cache_data(show_spinner="Searching tickers...")
-def _search_company_options(query: str):
+def _search_company_options(query: str, api_payload: str):
+    _apply_api_payload(api_payload)
     return search_companies(query)
 
 
 @st.cache_data(show_spinner="Loading research data...")
-def _load_research_pack(ticker: str, profile_payload: str | None):
+def _load_research_pack(ticker: str, profile_payload: str | None, api_payload: str):
+    _apply_api_payload(api_payload)
     profile = None
     if profile_payload:
         profile = CompanyProfile(**json.loads(profile_payload))
@@ -588,13 +820,9 @@ def _profile_payload(hist: HistoricalData) -> str | None:
     return json.dumps(hist.profile.__dict__)
 
 
-def _access_password() -> str | None:
-    return os.getenv("APP_ACCESS_PASSWORD")
-
-
 def _auth_gate() -> bool:
-    password = _access_password()
-    if not password:
+    users = _configured_users()
+    if not users:
         return True
     if st.session_state.get("is_authenticated"):
         return True
@@ -602,125 +830,178 @@ def _auth_gate() -> bool:
     st.markdown(
         """
         <div class="hero-card">
-            <div class="small-label">Private Access</div>
+            <div class="small-label">User Login</div>
             <div class="hero-name">Research Platform</div>
-            <div class="hero-subtle">This deployment is access-restricted. Enter the password to continue.</div>
+            <div class="hero-subtle">Sign in to load the platform and choose from saved API key profiles.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    entered = st.text_input("Access password", type="password")
-    if st.button("Enter Platform", type="primary", use_container_width=True):
-        if entered == password:
+    username = st.text_input("Username", key="login_username")
+    entered = st.text_input("Password", type="password", key="login_password")
+    if st.button("Sign In", type="primary", use_container_width=True):
+        user = users.get(username.strip().lower())
+        if user and entered == user["password"]:
             st.session_state["is_authenticated"] = True
+            st.session_state["auth_user"] = user["username"]
+            st.session_state["auth_display_name"] = user["display_name"]
+            st.session_state["api_profile_id"] = _default_profile_id(user["allowed_profiles"])
             st.rerun()
-        st.error("Incorrect password.")
+        st.error("Incorrect username or password.")
     return False
 
 
-def _sidebar_search() -> tuple[str, bytes | None, bool]:
-    with st.sidebar:
-        if _access_password():
-            state = "Unlocked" if st.session_state.get("is_authenticated") else "Locked"
-            st.caption(f"Access: {state}")
+def _workspace_controls() -> tuple[str, bytes | None, bool]:
+    users = _configured_users()
+    profiles = _configured_api_profiles()
+    active_credentials = current_api_credentials()
 
-        st.markdown(
-            """
-            <div style="background:#e8f0f9;border:1px solid #b8cfe0;border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.6rem;">
-                <div style="color:#0f4c81;font-family:'Playfair Display',Georgia,serif;font-size:1rem;font-weight:600;letter-spacing:0.01em;">
-                    Search any public company
-                </div>
-                <div style="color:#4e5d6c;font-size:0.82rem;margin-top:0.2rem;">
-                    Enter a name or ticker symbol below
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        """
+        <div class="landing-card" style="margin-bottom:1rem;">
+            <div class="small-label">Workspace Controls</div>
+            <div class="landing-title" style="margin-top:0.35rem;">Company, API profile, and model settings</div>
+            <div class="landing-copy">Use the sub-tabs below instead of the sidebar. Search, provider profile selection, assumptions, and exports now live in the main workspace.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    top_cols = st.columns([1.4, 1, 1])
+    with top_cols[0]:
+        if users and st.session_state.get("is_authenticated"):
+            signed_in = st.session_state.get("auth_display_name") or st.session_state.get("auth_user")
+            st.metric("Signed In", signed_in)
+        else:
+            st.metric("Access", "Open")
+    with top_cols[1]:
+        providers = []
+        if active_credentials.get("ALPHA_VANTAGE_API_KEY"):
+            providers.append("Alpha Vantage")
+        if active_credentials.get("FMP_API_KEY") or active_credentials.get("FINANCIAL_MODELING_PREP_API_KEY"):
+            providers.append("FMP")
+        st.metric("Active APIs", ", ".join(providers) if providers else "None")
+    with top_cols[2]:
+        st.metric("Historical View", st.session_state["reporting_view"])
+
+    ctrl_company, ctrl_ops, ctrl_wc, ctrl_fin = st.tabs(["Company", "API & Access", "Working Capital", "Forecast & Financing"])
+
+    with ctrl_company:
         query = st.text_input("Company name or ticker", key="search_query", placeholder="e.g. Apple, AAPL, Microsoft...")
-
         if len(query.strip()) >= 1:
             try:
-                results = _search_company_options(query)
+                results = _search_company_options(query, _active_api_payload())
             except Exception as exc:
                 results = []
                 st.caption(f"Search unavailable: {exc}")
         else:
             results = []
 
+        result_cols = st.columns(2)
         for idx, result in enumerate(results[:6]):
-            with st.container(border=True):
-                cols = st.columns([1, 3, 1.2])
-                with cols[0]:
-                    if result.logo_url:
-                        try:
-                            st.image(result.logo_url, width=30)
-                        except Exception:
-                            pass
-                with cols[1]:
-                    st.markdown(f"**{result.name or result.symbol}**")
-                    st.caption(f"{result.symbol} • {result.exchange}")
-                with cols[2]:
-                    if st.button("Use ›", key=f"use_{result.symbol}_{idx}", use_container_width=True):
-                        st.session_state["selected_ticker"] = result.symbol
+            with result_cols[idx % 2]:
+                with st.container(border=True):
+                    inner = st.columns([0.7, 3, 1.1])
+                    with inner[0]:
+                        if result.logo_url:
+                            try:
+                                st.image(result.logo_url, width=28)
+                            except Exception:
+                                pass
+                    with inner[1]:
+                        st.markdown(f"**{result.name or result.symbol}**")
+                        st.caption(f"{result.symbol} • {result.exchange}")
+                    with inner[2]:
+                        if st.button("Use", key=f"use_{result.symbol}_{idx}", use_container_width=True):
+                            st.session_state["selected_ticker"] = result.symbol
+                            st.rerun()
 
-        # Single source of truth: prefer explicitly selected ticker, else use typed query
         selected = st.session_state.get("selected_ticker", "")
-        if selected:
-            st.markdown(
-                f"""
-                <div style="background:#e8f0f9;border:1px solid #b8cfe0;border-radius:8px;padding:0.45rem 0.75rem;margin:0.4rem 0 0.2rem;">
-                    <span style="font-size:0.75rem;color:#4e5d6c;font-family:'Lora',Georgia,serif;">Selected</span>
-                    <span style="font-size:0.95rem;font-weight:600;color:#0f4c81;font-family:'Playfair Display',Georgia,serif;margin-left:0.4rem;">{selected}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if st.button("Clear selection", key="clear_ticker", use_container_width=True):
+        ticker = selected or query.strip().upper()
+        action_cols = st.columns([1.2, 1, 1])
+        with action_cols[0]:
+            if selected:
+                st.markdown(f"**Selected ticker:** `{selected}`")
+            elif ticker:
+                st.markdown(f"**Entered ticker:** `{ticker}`")
+            else:
+                st.caption("No ticker selected yet.")
+        with action_cols[1]:
+            if st.button("Clear Ticker", use_container_width=True):
                 st.session_state["selected_ticker"] = ""
                 st.rerun()
-            ticker = selected
-        else:
-            ticker = query.strip().upper()
+        with action_cols[2]:
+            st.radio("Historical view", ["Full Year", "Quarterly"], horizontal=True, key="reporting_view")
 
-        st.divider()
         uploaded = st.file_uploader(
-            "Or upload custom CSV",
+            "Upload custom CSV",
             type=["csv"],
             help=(
                 "For private companies or custom datasets only. "
-                "Public company data is pulled automatically from SEC EDGAR and Yahoo Finance — no upload needed. "
-                "See data/custom_historical_template.csv for the required column format."
+                "Public company data is pulled automatically from SEC EDGAR and Yahoo Finance."
             ),
         )
         csv_bytes = uploaded.read() if uploaded else None
-
-        st.radio("Historical view", ["Full Year", "Quarterly"], horizontal=True, key="reporting_view")
         analyze_clicked = st.button("Analyze Company", use_container_width=True, type="primary")
 
-        if ticker:
-            st.divider()
-            with st.expander("Forecast Assumptions", expanded=True):
-                st.slider("Year 1 Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
-                st.slider(f"Year {PROJ_YEARS} Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
-                st.slider("Year 1 Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
-                st.slider(f"Year {PROJ_YEARS} Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
-                st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
-                st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
-                st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
+    with ctrl_ops:
+        if users and st.session_state.get("is_authenticated"):
+            user = users.get(str(st.session_state.get("auth_user", "")).lower(), {})
+            allowed_profiles = [pid for pid in user.get("allowed_profiles", []) if pid in profiles]
+        else:
+            allowed_profiles = list(profiles.keys())
+        if profiles and allowed_profiles:
+            current_profile = st.session_state.get("api_profile_id")
+            if current_profile not in allowed_profiles:
+                current_profile = _default_profile_id(allowed_profiles)
+                st.session_state["api_profile_id"] = current_profile
+            selected_profile = st.selectbox(
+                "Saved API profile",
+                allowed_profiles,
+                index=allowed_profiles.index(current_profile),
+                format_func=lambda pid: profiles[pid]["label"],
+                key="workspace_api_profile_selector",
+            )
+            st.session_state["api_profile_id"] = selected_profile
+            creds = profiles[selected_profile]["credentials"]
+            profile_rows = [
+                ("Profile", profiles[selected_profile]["label"]),
+                ("Alpha Vantage", "Configured" if creds.get("ALPHA_VANTAGE_API_KEY") else "Not set"),
+                ("FMP", "Configured" if creds.get("FMP_API_KEY") or creds.get("FINANCIAL_MODELING_PREP_API_KEY") else "Not set"),
+            ]
+            st.dataframe(_kv_table(profile_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No saved API profiles are configured in `.streamlit/secrets.toml`.")
+        if users and st.session_state.get("is_authenticated"):
+            if st.button("Log Out", use_container_width=True):
+                _logout()
 
-            with st.expander("Working Capital", expanded=False):
-                st.slider("DSO", 1, 120, step=1, key="dso_days")
-                st.slider("DIO", 1, 120, step=1, key="dio_days")
-                st.slider("DPO", 1, 120, step=1, key="dpo_days")
+    with ctrl_wc:
+        wc_cols = st.columns(3)
+        with wc_cols[0]:
+            st.slider("DSO", 1, 120, step=1, key="dso_days")
+        with wc_cols[1]:
+            st.slider("DIO", 1, 120, step=1, key="dio_days")
+        with wc_cols[2]:
+            st.slider("DPO", 1, 120, step=1, key="dpo_days")
 
-            with st.expander("Financing", expanded=False):
-                st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
-                st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
-                st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
-                st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
+    with ctrl_fin:
+        forecast_cols = st.columns(2)
+        with forecast_cols[0]:
+            st.slider("Year 1 Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
+            st.slider(f"Year {PROJ_YEARS} Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
+            st.slider("Year 1 Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
+            st.slider(f"Year {PROJ_YEARS} Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
+            st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
+        with forecast_cols[1]:
+            st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
+            st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
+            st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
+            st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
+            st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
+            st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
 
-            st.caption("Valuation covers DCF, trading comps, precedents, and LBO. Historical view toggles between annual and quarterly API pulls.")
+        st.caption("Valuation covers DCF, trading comps, precedents, and LBO. Historical view toggles between annual and quarterly data.")
 
     return ticker, csv_bytes, analyze_clicked
 
@@ -771,6 +1052,29 @@ def _render_welcome() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _render_profile_snapshot(hist: HistoricalData, research=None) -> None:
+    profile = hist.profile
+    st.markdown("### Company Snapshot")
+    snapshot_cols = st.columns(4)
+    snapshot_cols[0].metric("Ticker", hist.ticker)
+    snapshot_cols[1].metric("Company", profile.name if profile and profile.name else hist.ticker)
+    snapshot_cols[2].metric("Sector", profile.sector if profile and profile.sector else "N/A")
+    snapshot_cols[3].metric("Industry", profile.industry if profile and profile.industry else "N/A")
+
+    left, right = st.columns([1.1, 1.4])
+    with left:
+        st.dataframe(_profile_export_frame(hist), use_container_width=True, hide_index=True)
+    with right:
+        provider_rows = [
+            ("Saved API Profile", _configured_api_profiles().get(st.session_state.get("api_profile_id", ""), {}).get("label", "None")),
+            ("Research Provider", research.provider if research else "Not enabled"),
+            ("Peers Returned", str(len(research.peers)) if research and research.peers else "0"),
+            ("Earnings Events", str(len(research.earnings_events)) if research and research.earnings_events else "0"),
+            ("Precedents", str(len(research.precedents)) if research and research.precedents else "0"),
+        ]
+        st.dataframe(_kv_table(provider_rows), use_container_width=True, hide_index=True)
 
 
 def tab_home(hist: HistoricalData) -> None:
@@ -1141,7 +1445,7 @@ def tab_valuation(outputs: dict[str, object], hist: HistoricalData) -> None:
     research = None
     if fmp_enabled():
         try:
-            research = _load_research_pack(hist.ticker, _profile_payload(hist))
+            research = _load_research_pack(hist.ticker, _profile_payload(hist), _active_api_payload())
         except Exception:
             research = None
 
@@ -1303,7 +1607,7 @@ def tab_research(hist: HistoricalData) -> None:
         return
 
     try:
-        research = _load_research_pack(hist.ticker, _profile_payload(hist))
+        research = _load_research_pack(hist.ticker, _profile_payload(hist), _active_api_payload())
     except Exception as exc:
         st.warning(f"Research data is unavailable right now: {exc}")
         return
@@ -1420,59 +1724,77 @@ def tab_interpretation(outputs: dict[str, object], ticker: str, metrics) -> None
     )
 
 
-def _render_export_button(outputs: dict, hist_df: pd.DataFrame, base_asm: ModelAssumptions) -> None:
-    """Render an Excel download button in the sidebar using the Base scenario output."""
+def _render_exports_section(outputs: dict, hist: HistoricalData, base_asm: ModelAssumptions, research=None) -> None:
+    """Render richer workbook and flat-file exports in the main workspace."""
     base_out = outputs.get("Base")
     if base_out is None:
         return
     try:
         from model_engine.sensitivity import build_sensitivity_table
         sensitivity = build_sensitivity_table(
-            HistoricalData(ticker="export", df=hist_df, annual_df=hist_df),
+            HistoricalData(ticker="export", df=hist.annual(), annual_df=hist.annual()),
             base_asm,
         )
     except Exception:
         sensitivity = pd.DataFrame()
+
+    extra_sheets = _research_export_sheets(hist, research, base_asm)
     try:
-        excel_bytes = build_excel_bytes(base_out, sensitivity, hist_df)
+        excel_bytes = build_excel_bytes(base_out, sensitivity, hist.annual(), additional_sheets=extra_sheets)
     except Exception:
         return
-    st.download_button(
-        label="Export to Excel",
+    st.markdown("### Export Center")
+    st.caption("Download a formatted workbook plus flat-file extracts for historicals, profile context, and research tables.")
+    export_cols = st.columns(3)
+    export_cols[0].download_button(
+        label="Download Excel Workbook",
         data=excel_bytes,
-        file_name="3statement_model.xlsx",
+        file_name=f"{hist.ticker.lower().replace('-', '_')}_research_model.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+    export_cols[1].download_button(
+        label="Historical CSV",
+        data=hist.annual().to_csv(index=False),
+        file_name=f"{hist.ticker.lower().replace('-', '_')}_historical.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    export_cols[2].download_button(
+        label="Research JSON",
+        data=json.dumps({k: v.to_dict(orient="records") for k, v in extra_sheets.items()}, indent=2),
+        file_name=f"{hist.ticker.lower().replace('-', '_')}_research_export.json",
+        mime="application/json",
+        use_container_width=True,
+    )
 
-
-def _inject_secrets() -> None:
-    """Expose Streamlit secrets as environment variables so model_engine modules can read them."""
-    _SECRET_KEYS = ("FMP_API_KEY", "FINANCIAL_MODELING_PREP_API_KEY", "ALPHA_VANTAGE_API_KEY", "APP_ACCESS_PASSWORD")
-    try:
-        for key in _SECRET_KEYS:
-            if key in st.secrets and not os.getenv(key):
-                os.environ[key] = str(st.secrets[key])
-    except Exception:
-        pass
+    summary = pd.DataFrame(
+        [
+            {"Export": "Workbook Sheets", "Count": len(extra_sheets) + 8 + (1 if not sensitivity.empty else 0)},
+            {"Export": "Quarterly Rows", "Count": len(hist.quarterly())},
+            {"Export": "Peer Rows", "Count": len(research.peers) if research and research.peers else 0},
+            {"Export": "Precedent Rows", "Count": len(research.precedents) if research and research.precedents else 0},
+        ]
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
 def main() -> None:
-    st.set_page_config(page_title="3-Statement Model", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="3-Statement Model", layout="wide", initial_sidebar_state="collapsed")
     st.markdown(APP_CSS, unsafe_allow_html=True)
-    _inject_secrets()
     _init_session_state()
     if not _auth_gate():
         return
+    _apply_api_payload(_active_api_payload())
 
-    ticker, csv_bytes, analyze_clicked = _sidebar_search()
+    ticker, csv_bytes, analyze_clicked = _workspace_controls()
 
     if not ticker and not csv_bytes:
         _render_welcome()
         return
 
     try:
-        hist = _load_data(ticker, csv_bytes)
+        hist = _load_data(ticker, csv_bytes, _active_api_payload())
     except Exception as exc:
         msg = str(exc)
         st.error(f"Could not load data for **{ticker}**: {msg}")
@@ -1530,36 +1852,45 @@ def main() -> None:
 
     hist_json = annual_df.to_json()
     outputs = {name: _run_model(hist_json, ticker, _asm_to_json(asm)) for name, asm in scenarios.items()}
+    research = None
+    if fmp_enabled():
+        try:
+            research = _load_research_pack(hist.ticker, _profile_payload(hist), _active_api_payload())
+        except Exception:
+            research = None
 
-    with st.sidebar:
-        st.divider()
-        _render_export_button(outputs, annual_df, base_asm)
-
-    tabs = st.tabs(
-        ["Home", "Overview", "Research", "Drivers", "Income Statement", "Balance Sheet", "Cash Flow", "Schedules", "Sensitivity", "Valuation", "Interpretation"]
-    )
+    tabs = st.tabs(["Overview", "Model", "Market", "Export"])
     with tabs[0]:
-        tab_home(hist)
+        overview_subtabs = st.tabs(["Summary", "Historical"])
+        with overview_subtabs[0]:
+            tab_home(hist)
+            _render_profile_snapshot(hist, research)
+        with overview_subtabs[1]:
+            tab_overview(hist, ticker)
     with tabs[1]:
-        tab_overview(hist, ticker)
+        model_subtabs = st.tabs(["Drivers", "Income Statement", "Balance Sheet", "Cash Flow", "Schedules", "Sensitivity"])
+        with model_subtabs[0]:
+            tab_drivers(metrics)
+        with model_subtabs[1]:
+            tab_income(outputs)
+        with model_subtabs[2]:
+            tab_balance_sheet(outputs)
+        with model_subtabs[3]:
+            tab_cash_flow(outputs)
+        with model_subtabs[4]:
+            tab_schedules(outputs, base_asm)
+        with model_subtabs[5]:
+            tab_sensitivity(outputs, annual_df, ticker, base_asm)
     with tabs[2]:
-        tab_research(hist)
+        market_subtabs = st.tabs(["Research", "Valuation", "Interpretation"])
+        with market_subtabs[0]:
+            tab_research(hist)
+        with market_subtabs[1]:
+            tab_valuation(outputs, hist)
+        with market_subtabs[2]:
+            tab_interpretation(outputs, ticker, metrics)
     with tabs[3]:
-        tab_drivers(metrics)
-    with tabs[4]:
-        tab_income(outputs)
-    with tabs[5]:
-        tab_balance_sheet(outputs)
-    with tabs[6]:
-        tab_cash_flow(outputs)
-    with tabs[7]:
-        tab_schedules(outputs, base_asm)
-    with tabs[8]:
-        tab_sensitivity(outputs, annual_df, ticker, base_asm)
-    with tabs[9]:
-        tab_valuation(outputs, hist)
-    with tabs[10]:
-        tab_interpretation(outputs, ticker, metrics)
+        _render_exports_section(outputs, hist, base_asm, research)
 
     st.markdown(
         """

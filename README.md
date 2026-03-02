@@ -15,12 +15,14 @@ A public-facing Streamlit website for equity research, 3-statement forecasting, 
 
 ## Data providers
 
-- `yfinance` for core annual and quarterly statement history
+- `SEC EDGAR` as the primary source for annual financial statements on US-listed companies
+- `yfinance` as the fallback for annual statements and the default source for quarterly history, plus better non-US coverage
 - `Financial Modeling Prep` for optional peer comps, analyst research, earnings events, precedent transaction headlines, and stronger cloud-ready search
 
 To enable the research workspace and live market-data enrichment, set:
 
 ```bash
+export ALPHA_VANTAGE_API_KEY=your_key_here
 export FMP_API_KEY=your_key_here
 ```
 
@@ -30,7 +32,18 @@ Optional access control for a public deployment:
 export APP_ACCESS_PASSWORD=choose_a_password
 ```
 
-Without `FMP_API_KEY`, the main modeling app still works, but the research tab falls back gracefully and advanced peer/precedent data will be unavailable.
+For the new multi-user flow, define users and saved API key profiles in `.streamlit/secrets.toml`. A template is included at `.streamlit/secrets.example.toml`.
+
+Without `FMP_API_KEY`, the main modeling app still works because statement loading relies on SEC and Yahoo Finance first. `FMP_API_KEY` is optional and mainly improves search, comps, analyst data, and precedent coverage.
+
+If you want materially richer keyed data than SEC + `yfinance`, the best fit for this codebase is `Financial Modeling Prep` because it already has integration points here. For institutional-grade coverage, vendors like FactSet, S&P Capital IQ, Bloomberg, or Refinitiv are stronger, but they require separate commercial integrations.
+
+Obvious places to plug in keys:
+
+- Local Streamlit runs: `.streamlit/secrets.toml`
+- Local template for login/profile structure: `.streamlit/secrets.example.toml`
+- General env-based runs: `.env` using `.env.example` as the template
+- Render deployment: environment variables in `render.yaml` / Render dashboard
 
 ## Run locally
 

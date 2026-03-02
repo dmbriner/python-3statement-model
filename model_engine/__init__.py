@@ -20,6 +20,7 @@ from .market_data import (
     search_companies,
 )
 from .model import ModelOutput, run_three_statement_model
+from .runtime_config import clear_api_credentials, current_api_credentials, set_api_credentials
 from .sensitivity import build_multi_output_sensitivity, build_sensitivity_table, build_tornado_chart
 from .valuation import (
     DCFResult,
@@ -56,6 +57,9 @@ __all__ = [
     "resolve_company_profile",
     "build_research_pack",
     "fmp_enabled",
+    "set_api_credentials",
+    "clear_api_credentials",
+    "current_api_credentials",
     # Presentation
     "LINE_ITEM_META",
     "format_line_item_label",

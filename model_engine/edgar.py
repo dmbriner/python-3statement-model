@@ -120,8 +120,19 @@ def _ticker_index() -> dict[str, int]:
 
 def ticker_to_cik(ticker: str) -> int | None:
     """Return SEC CIK integer for a ticker, or None if not a US-listed company."""
+    normalized = ticker.upper().strip()
+    candidates = [normalized]
+    if "." in normalized:
+        candidates.append(normalized.replace(".", "-"))
+    if "-" in normalized:
+        candidates.append(normalized.replace("-", "."))
     try:
-        return _ticker_index().get(ticker.upper().strip())
+        index = _ticker_index()
+        for candidate in candidates:
+            cik = index.get(candidate)
+            if cik is not None:
+                return cik
+        return None
     except Exception:
         return None
 

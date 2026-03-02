@@ -14,7 +14,7 @@ from model_engine import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Python-powered 3-statement model engine")
-    parser.add_argument("--ticker", default="UPS", help="Ticker symbol (default: UPS)")
+    parser.add_argument("--ticker", required=True, help="Ticker symbol")
     parser.add_argument("--years", type=int, default=5, help="Projection years (default: 5)")
     parser.add_argument(
         "--historical-csv",
@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=str,
-        default="outputs/ups_3statement_model.xlsx",
+        default=None,
         help="Excel output path",
     )
     return parser.parse_args()
@@ -40,11 +40,12 @@ def main() -> None:
     model_output = run_three_statement_model(historical, assumptions)
     sensitivity = build_sensitivity_table(historical, assumptions)
 
+    out_path = args.out or f"outputs/{historical.ticker.lower().replace('-', '_')}_3statement_model.xlsx"
     result_file = export_model_to_excel(
         output=model_output,
         sensitivity=sensitivity,
         historical=historical.df,
-        out_path=Path(args.out),
+        out_path=Path(out_path),
     )
 
     print(f"Model complete for {args.ticker}")

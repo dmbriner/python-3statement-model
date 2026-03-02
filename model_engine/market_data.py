@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from .runtime_config import get_api_credential
 
 YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 YAHOO_QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
@@ -14,9 +15,13 @@ FMP_V4_BASE_URL = "https://financialmodelingprep.com/api/v4"
 AV_BASE_URL = "https://www.alphavantage.co/query"
 DEFAULT_TIMEOUT = 8
 
-# Fallback API key — works for local dev without a secrets file.
-# For production (Streamlit Cloud), set ALPHA_VANTAGE_API_KEY in the secrets dashboard.
-_AV_KEY_FALLBACK = "YT27T5XESP3OERHI"
+
+def _normalize_symbol(symbol: str) -> str:
+    return symbol.strip().upper()
+
+
+def _quote_symbol(symbol: str) -> str:
+    return _normalize_symbol(symbol).replace(".", "-")
 
 
 @dataclass(frozen=True)
@@ -116,7 +121,11 @@ def _session() -> requests.Session:
 
 
 def fmp_api_key() -> str | None:
-    return os.getenv("FMP_API_KEY") or os.getenv("FINANCIAL_MODELING_PREP_API_KEY")
+    return (
+        get_api_credential("FMP_API_KEY", "FINANCIAL_MODELING_PREP_API_KEY")
+        or os.getenv("FMP_API_KEY")
+        or os.getenv("FINANCIAL_MODELING_PREP_API_KEY")
+    )
 
 
 def fmp_enabled() -> bool:
@@ -124,7 +133,7 @@ def fmp_enabled() -> bool:
 
 
 def alpha_vantage_api_key() -> str | None:
-    return os.getenv("ALPHA_VANTAGE_API_KEY") or _AV_KEY_FALLBACK
+    return get_api_credential("ALPHA_VANTAGE_API_KEY") or os.getenv("ALPHA_VANTAGE_API_KEY")
 
 
 def _av_search(query: str, limit: int = 8) -> list[CompanySearchResult]:
@@ -174,7 +183,7 @@ def _logo_from_website(website: str | None) -> str | None:
 
 
 def _ticker_logo(symbol: str) -> str:
-    return f"https://financialmodelingprep.com/image-stock/{symbol.upper()}.png"
+    return f"https://financialmodelingprep.com/image-stock/{_quote_symbol(symbol)}.png"
 
 
 def _raw_value(value):
@@ -260,7 +269,7 @@ def search_companies(query: str, limit: int = 8) -> list[CompanySearchResult]:
 
 
 def _fallback_search(query: str) -> list[CompanySearchResult]:
-    normalized = query.upper().replace(".", "-").strip()
+    normalized = _quote_symbol(query)
     if not normalized or len(normalized) > 7 or not normalized.replace("-", "").isalnum():
         return []
     try:
@@ -288,18 +297,20 @@ def _fallback_search(query: str) -> list[CompanySearchResult]:
 
 
 def resolve_company_profile(symbol: str, fallback_name: str | None = None) -> CompanyProfile:
+    normalized = _normalize_symbol(symbol)
+    quote_symbol = _quote_symbol(symbol)
     if fmp_enabled():
         try:
-            profile_payload = _fmp_get(FMP_V3_BASE_URL, f"/profile/{symbol}", {})
+            profile_payload = _fmp_get(FMP_V3_BASE_URL, f"/profile/{quote_symbol}", {})
             profile = profile_payload[0] if isinstance(profile_payload, list) and profile_payload else {}
             if profile:
                 return CompanyProfile(
-                    symbol=symbol.upper(),
-                    name=profile.get("companyName") or fallback_name or symbol.upper(),
+                    symbol=normalized,
+                    name=profile.get("companyName") or fallback_name or normalized,
                     exchange=profile.get("exchangeShortName") or profile.get("exchange") or "",
                     quote_type=profile.get("type") or "Equity",
                     website=profile.get("website"),
-                    logo_url=profile.get("image") or _logo_from_website(profile.get("website")) or _ticker_logo(symbol),
+                    logo_url=profile.get("image") or _logo_from_website(profile.get("website")) or _ticker_logo(quote_symbol),
                     sector=profile.get("sector"),
                     industry=profile.get("industry"),
                     currency=profile.get("currency"),
@@ -313,7 +324,7 @@ def resolve_company_profile(symbol: str, fallback_name: str | None = None) -> Co
 
     params = {"modules": "price,assetProfile,defaultKeyStatistics,financialData"}
     response = _session().get(
-        YAHOO_QUOTE_SUMMARY_URL.format(symbol=symbol),
+        YAHOO_QUOTE_SUMMARY_URL.format(symbol=quote_symbol),
         params=params,
         timeout=DEFAULT_TIMEOUT,
     )
@@ -325,12 +336,12 @@ def resolve_company_profile(symbol: str, fallback_name: str | None = None) -> Co
     fin = root.get("financialData", {})
     website = asset_profile.get("website")
     return CompanyProfile(
-        symbol=symbol.upper(),
-        name=price.get("longName") or price.get("shortName") or fallback_name or symbol.upper(),
+        symbol=normalized,
+        name=price.get("longName") or price.get("shortName") or fallback_name or normalized,
         exchange=price.get("exchangeName") or "",
         quote_type=price.get("quoteType") or "",
         website=website,
-        logo_url=_logo_from_website(website) or _ticker_logo(symbol),
+        logo_url=_logo_from_website(website) or _ticker_logo(quote_symbol),
         sector=asset_profile.get("sector"),
         industry=asset_profile.get("industry"),
         currency=price.get("currency"),
@@ -345,9 +356,10 @@ def build_research_pack(symbol: str, profile: CompanyProfile | None = None) -> R
     if not fmp_enabled():
         return None
 
-    peers = _fetch_peer_companies(symbol)
-    analyst_snapshot = _fetch_analyst_snapshot(symbol)
-    earnings = _fetch_earnings_events(symbol)
+    quote_symbol = _quote_symbol(symbol)
+    peers = _fetch_peer_companies(quote_symbol)
+    analyst_snapshot = _fetch_analyst_snapshot(quote_symbol)
+    earnings = _fetch_earnings_events(quote_symbol)
     precedents = _fetch_precedent_transactions(profile.industry if profile else None, profile.sector if profile else None)
     return ResearchPack(
         peers=peers,
