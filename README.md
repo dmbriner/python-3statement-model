@@ -1,159 +1,102 @@
-# Python 3-Statement Financial Model
+# Python 3-Statement Research And Valuation Platform
 
-A fully interactive financial modeling platform built in Python. Enter any stock ticker (or upload a CSV) and get a linked Income Statement, Balance Sheet, and Cash Flow projection — with DCF valuation, sensitivity analysis, and auto-generated interpretation.
+A public-facing Streamlit website for equity research, 3-statement forecasting, sensitivity analysis, and multi-method valuation.
 
-**[Live Demo →](https://share.streamlit.io)** *(deploy your own with one click — see below)*
+## What it now includes
 
----
+- Company search with ticker selection and logo support
+- Annual and quarterly historical financial views
+- Linked 3-statement forecasting across Base, Bull, and Bear cases
+- Hover definitions and formulas for core line items
+- Broader chart coverage across operations, balance sheet, cash flow, and valuation
+- Four valuation methods: DCF, trading comps, precedent transactions, and LBO
+- Research workspace for peer comps, analyst targets/estimates, earnings events, and precedent headlines
+- Cloud deployment files for Streamlit-style hosting
 
-## What it does
+## Data providers
 
-Type a ticker like `AAPL`, `MSFT`, or `UPS`, click **Analyze Company**, and the app:
+- `yfinance` for core annual and quarterly statement history
+- `Financial Modeling Prep` for optional peer comps, analyst research, earnings events, precedent transaction headlines, and stronger cloud-ready search
 
-1. Pulls historical financials via `yfinance`
-2. Calculates key historical metrics (revenue CAGR, avg margins, working capital days, leverage)
-3. Auto-populates assumption sliders based on the company's own history
-4. Projects all 3 financial statements 5 years forward across Base / Bull / Bear scenarios
-5. Runs a DCF valuation with WACC sensitivity
-6. Generates a written interpretation of the model output
-
-All assumptions are fully adjustable — sliders update every chart and table instantly.
-
----
-
-## Features
-
-| Module | What it covers |
-|--------|---------------|
-| **Income Statement** | Revenue → Gross Profit → EBITDA → EBIT → Net Income, all scenarios |
-| **Balance Sheet** | Full projected balance sheet with equity rollforward and integrity checks |
-| **Cash Flow** | CFO / CFI / CFF breakdown, FCF build, cash sweep logic |
-| **PP&E Schedule** | CapEx + depreciation → ending PP&E each year |
-| **Debt Schedule** | Amortization, cash sweeps, interest on average debt |
-| **Working Capital** | DSO / DIO / DPO → NWC change → CFO impact |
-| **Sensitivity** | 2D heatmap (growth × margin) and tornado chart for FCF, EBITDA, or Net Income |
-| **DCF Valuation** | PV of FCFs + Gordon Growth terminal value → EV → equity value → per-share price |
-| **Interpretation** | Auto-generated narrative on growth, margins, leverage, coverage, and key risks |
-| **Integrity Checks** | Balance sheet balance, cash reconciliation, covenant warnings |
-
----
-
-## Screenshots
-
-*(Add screenshots here after deploying)*
-
----
-
-## Running locally
+To enable the research workspace and live market-data enrichment, set:
 
 ```bash
-git clone https://github.com/yourusername/python-3statement-model
-cd python-3statement-model
+export FMP_API_KEY=your_key_here
+```
 
+Optional access control for a public deployment:
+
+```bash
+export APP_ACCESS_PASSWORD=choose_a_password
+```
+
+Without `FMP_API_KEY`, the main modeling app still works, but the research tab falls back gracefully and advanced peer/precedent data will be unavailable.
+
+## Run locally
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Opens at `http://localhost:8501`.
+## Deploy to the cloud
 
----
+This repo is already prepared for public deployment.
 
-## Deploying to the web (free)
+### Option 1: Render
 
-1. Push this repo to GitHub (public)
-2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub
-3. Click **New app** → select your repo → set main file to `app.py` → **Deploy**
+Recommended for this project because it is better suited for environment variables and future API expansion.
 
-You'll get a public URL like `yourname-3statement-model.streamlit.app` in ~2 minutes.
+1. Push this repo to GitHub.
+2. Create a new `Web Service` in Render and connect the repo.
+3. Render will detect [render.yaml](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/render.yaml).
+4. Add `FMP_API_KEY` in Render environment settings.
+5. Deploy and use the generated public URL.
 
----
+Exact Git and deployment steps are in [DEPLOY.md](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/DEPLOY.md).
 
-## Using a CSV instead of yfinance
+### Option 2: Streamlit Community Cloud
 
-If yfinance doesn't have data for a company (private company, international, etc.), upload a CSV matching this format:
+1. Push this repo to GitHub.
+2. Create a new app in Streamlit Community Cloud.
+3. Set the main file to `app.py`.
+4. Add `FMP_API_KEY` in the app secrets or environment settings.
+5. Deploy.
 
-```
-year, revenue, cogs, opex, depreciation, interest_expense, tax_rate,
-cash, accounts_receivable, inventory, accounts_payable, ppne, debt,
-shares_outstanding, capex, equity, other_assets, other_liabilities
-```
+## Deployment files included
 
-See [`data/ups_historical_template.csv`](data/ups_historical_template.csv) for a working example with UPS 2021–2024 data.
-
----
+- [Procfile](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/Procfile)
+- [render.yaml](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/render.yaml)
+- [runtime.txt](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/runtime.txt)
+- [.streamlit/config.toml](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/.streamlit/config.toml)
+- [.env.example](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/.env.example)
+- [DEPLOY.md](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/DEPLOY.md)
 
 ## Project structure
 
-```
-app.py                          # Streamlit dashboard (9 tabs)
-run_model.py                    # CLI entry point (Excel export)
+```text
+app.py
+run_model.py
 requirements.txt
+Procfile
+render.yaml
+runtime.txt
 
 model_engine/
-  config.py                     # ModelAssumptions dataclass
-  data.py                       # yfinance loader + CSV parser
-  model.py                      # 3-statement projection engine
-  analyzer.py                   # Historical metrics + smart defaults
-  valuation.py                  # DCF + WACC sensitivity grid
-  integrity.py                  # Balance sheet + cash flow checks
-  sensitivity.py                # 2D heatmap + tornado chart
-  export.py                     # Excel workbook export
-
-data/
-  ups_historical_template.csv   # Sample historical data (UPS 2021–2024)
+  analyzer.py
+  config.py
+  data.py
+  export.py
+  integrity.py
+  line_items.py
+  market_data.py
+  model.py
+  sensitivity.py
+  valuation.py
 ```
 
----
+## Remaining platform gap
 
-## How the model works
-
-```
-Historical Data (yfinance or CSV)
-        │
-        ▼
-  analyze_historical_data()  →  HistoricalMetrics
-        │                        (CAGR, margins, WC days, leverage)
-        ▼
-  suggest_scenarios()        →  Base / Bull / Bear ModelAssumptions
-        │
-        ▼
-  run_three_statement_model()
-        │
-        ├─ Income Statement   (Revenue → EBIT → Net Income)
-        ├─ Balance Sheet      (Assets = Liabilities + Equity plug)
-        ├─ Cash Flow          (CFO + CFI + CFF → ending cash)
-        ├─ FCF                (NOPAT + D&A − CapEx − ΔNWC)
-        ├─ PP&E Schedule
-        ├─ Debt Schedule
-        └─ Equity Schedule
-        │
-        ▼
-  run_dcf()                  →  EV → Equity Value → Per Share
-  check_integrity()          →  Balance + cash reconciliation checks
-  build_tornado_chart()      →  Which assumptions move the needle most
-```
-
----
-
-## Key modeling assumptions
-
-- **Bull scenario:** Base + 2.5pp revenue growth, +1.5pp gross margin each year
-- **Bear scenario:** Base − 2.5pp revenue growth, −2.0pp gross margin each year
-- **Cash sweep:** Excess cash (above 1.5× minimum buffer) automatically repays debt
-- **Equity:** Computed as a plug (Assets − Liabilities) to ensure the balance sheet always balances; rollforward tracked separately
-- **Terminal value:** Gordon Growth Model — `FCF_final × (1 + g) / (WACC − g)`
-
----
-
-## Tech stack
-
-- **Python 3.12**
-- **Streamlit** — interactive dashboard
-- **Plotly** — charts (line, bar, waterfall, heatmap, pie, tornado)
-- **pandas / numpy** — data manipulation and modeling
-- **yfinance** — live financial data
-- **openpyxl** — Excel export
-
----
-
-*Built as a portfolio project to demonstrate financial modeling, Python engineering, and data visualization.*
+The app is materially broader now, but it is still not a full institutional research platform. The largest remaining gap is deep transaction-detail data and fully automated peer-universe curation across sectors and geographies. Those can be added next if you choose a data vendor with broader coverage.

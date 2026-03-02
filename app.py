@@ -1,4 +1,4 @@
-"""Streamlit dashboard — Python-powered 3-Statement Model (any ticker)."""
+"""Streamlit dashboard for a 3-statement model with richer market data and valuation views."""
 
 from __future__ import annotations
 
@@ -6,58 +6,238 @@ import copy
 import dataclasses
 import io
 import json
+import os
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from model_engine import (
+    LINE_ITEM_META,
+    CompanyProfile,
     ModelAssumptions,
+    HistoricalData,
     analyze_historical_data,
+    build_excel_bytes,
+    build_research_pack,
     build_multi_output_sensitivity,
     build_tornado_chart,
     check_integrity,
+    fmp_enabled,
+    format_line_item_label,
     load_historical_data,
+    reporting_frame,
     run_dcf,
+    run_lbo,
+    run_multiple_valuation,
+    run_precedent_transactions,
     run_three_statement_model,
+    search_companies,
     suggest_scenarios,
+    valuation_summary_table,
     wacc_terminal_sensitivity,
 )
-from model_engine.data import HistoricalData
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Constants
-# ─────────────────────────────────────────────────────────────────────────────
-
-SCENARIO_COLORS = {"Base": "#2563EB", "Bull": "#16A34A", "Bear": "#DC2626"}
-SCENARIO_EMOJI  = {"Base": "⚖️", "Bull": "🐂", "Bear": "🐻"}
 PROJ_YEARS = 5
+SCENARIO_COLORS = {"Base": "#0f4c81", "Bull": "#0d7a5f", "Bear": "#a13d2d"}
+VALUE_METHOD_COLORS = ["#0f4c81", "#2d6a4f", "#b08968", "#9c6644", "#7f5539", "#5e3023"]
 
-SLIDER_DEFAULTS: dict = {
-    "growth_y1":  0.05,
-    "growth_yn":  0.03,
-    "gm_y1":      0.25,
-    "gm_yn":      0.25,
-    "opex_pct":   0.15,
-    "capex_pct":  0.05,
-    "dep_pct":    0.12,
-    "dso_days":   45,
-    "dio_days":   15,
-    "dpo_days":   30,
-    "tax_rate":   0.24,
-    "int_rate":   0.05,
+SLIDER_DEFAULTS: dict[str, float | int] = {
+    "growth_y1": 0.05,
+    "growth_yn": 0.03,
+    "gm_y1": 0.30,
+    "gm_yn": 0.29,
+    "opex_pct": 0.15,
+    "capex_pct": 0.05,
+    "dep_pct": 0.12,
+    "dso_days": 45,
+    "dio_days": 15,
+    "dpo_days": 30,
+    "tax_rate": 0.24,
+    "int_rate": 0.05,
     "div_payout": 0.30,
     "debt_amort": 500,
-    "wacc":       0.09,
+    "wacc": 0.09,
     "term_growth": 0.025,
 }
 
+APP_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Format helpers
-# ─────────────────────────────────────────────────────────────────────────────
+:root {
+    --bg: #f5f0e8;
+    --panel: rgba(255, 253, 248, 0.90);
+    --panel-strong: rgba(255, 253, 248, 0.98);
+    --ink: #1a1a2e;
+    --muted: #5c6370;
+    --line: rgba(26, 26, 46, 0.09);
+    --accent: #0f4c81;
+    --accent-2: #9a7b5a;
+    --success: #2d5a3d;
+    --danger: #8b2e1f;
+}
+
+.stApp {
+    font-family: 'Lora', Georgia, serif;
+    color: var(--ink);
+    background:
+        radial-gradient(ellipse at top left, rgba(154, 123, 90, 0.16), transparent 30%),
+        radial-gradient(ellipse at 90% 8%, rgba(15, 76, 129, 0.11), transparent 28%),
+        linear-gradient(170deg, #f8f2e8 0%, #ede4d3 55%, #e8dcc8 100%);
+}
+
+h1, h2, h3, h4 {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+[data-testid="stSidebar"] * {
+    font-family: 'Lora', Georgia, serif;
+}
+
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 3rem;
+}
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(255,253,248,0.97) 0%, rgba(245,240,232,0.99) 100%);
+    border-right: 1px solid var(--line);
+}
+
+[data-testid="metric-container"],
+.panel-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 16px;
+    box-shadow: 0 8px 24px rgba(26, 26, 46, 0.06);
+    backdrop-filter: blur(6px);
+}
+
+.hero-card {
+    padding: 1.4rem 1.6rem;
+    border-radius: 16px;
+    background:
+        linear-gradient(140deg, rgba(10,42,74,0.94) 0%, rgba(26,58,94,0.88) 55%, rgba(90,60,35,0.82) 100%);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 1.2rem;
+    box-shadow: 0 16px 48px rgba(10, 42, 74, 0.22);
+}
+
+.hero-subtle {
+    opacity: 0.82;
+    margin-top: 0.4rem;
+    font-family: 'Lora', Georgia, serif;
+    font-size: 0.98rem;
+}
+
+.glossary-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.45rem 0 1rem 0;
+}
+
+.glossary-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.38rem 0.72rem;
+    border-radius: 6px;
+    background: rgba(255,253,248,0.95);
+    border: 1px solid rgba(15,76,129,0.18);
+    color: var(--accent);
+    font-family: 'Lora', Georgia, serif;
+    font-size: 0.88rem;
+    cursor: help;
+    letter-spacing: 0.01em;
+}
+
+.search-result {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0.45rem 0.6rem;
+    background: var(--panel-strong);
+    margin-bottom: 0.4rem;
+}
+
+.section-note {
+    color: var(--muted);
+    font-size: 0.95rem;
+    font-style: italic;
+}
+
+.small-label {
+    font-family: 'Lora', Georgia, serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    opacity: 0.75;
+}
+
+.landing-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    margin: 1rem 0 1.2rem 0;
+}
+
+.landing-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.2rem 1.1rem;
+    box-shadow: 0 8px 24px rgba(26, 26, 46, 0.05);
+}
+
+.landing-icon {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+    font-style: normal;
+}
+
+.landing-title {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    color: var(--ink);
+}
+
+.landing-copy {
+    color: var(--muted);
+    line-height: 1.5;
+    font-size: 0.94rem;
+}
+
+.site-footer {
+    text-align: center;
+    padding: 2rem 1rem 1.5rem;
+    margin-top: 3rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-style: italic;
+}
+
+.site-footer a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(15, 76, 129, 0.35);
+    transition: border-color 0.2s;
+}
+
+.site-footer a:hover {
+    border-color: var(--accent);
+}
+</style>
+"""
+
 
 def _fm(v: float) -> str:
     return f"${v:,.0f}M"
@@ -67,31 +247,55 @@ def _fp(v: float) -> str:
     return f"{v * 100:.1f}%"
 
 
-def _millions_df(df: pd.DataFrame, exclude: list[str] | None = None) -> pd.DataFrame:
-    """Format all numeric cols as $X,XXXM (except year and excluded cols)."""
-    exclude = exclude or []
+def _safe_float(v) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+
+def _format_title_case(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    for col in out.columns:
-        if col == "year" or col in exclude:
-            continue
-        if pd.api.types.is_numeric_dtype(out[col]):
-            out[col] = out[col].apply(lambda v: f"${v:,.0f}M" if not pd.isna(v) else "—")
+    out.columns = [format_line_item_label(str(c)) for c in out.columns]
     return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Session state & assumption helpers
-# ─────────────────────────────────────────────────────────────────────────────
+def _format_display_df(df: pd.DataFrame, pct_cols: set[str] | None = None, per_share_cols: set[str] | None = None) -> pd.DataFrame:
+    pct_cols = pct_cols or set()
+    per_share_cols = per_share_cols or set()
+    out = df.copy()
+    for col in out.columns:
+        if col == "year" or col == "period_label":
+            continue
+        if col in pct_cols:
+            out[col] = out[col].apply(_fp)
+        elif col in per_share_cols:
+            out[col] = out[col].apply(lambda v: f"${v:,.2f}")
+        elif pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = out[col].apply(lambda v: f"${v:,.0f}M" if pd.notna(v) else "—")
+    return _format_title_case(out)
+
+
+def _glossary(keys: list[str]) -> None:
+    pills = []
+    for key in keys:
+        meta = LINE_ITEM_META.get(key)
+        if not meta:
+            continue
+        tooltip = f"{meta.definition} Formula: {meta.formula}"
+        pills.append(f'<span class="glossary-pill" title="{tooltip}">{meta.label}</span>')
+    if pills:
+        st.markdown(f'<div class="glossary-row">{"".join(pills)}</div>', unsafe_allow_html=True)
+
 
 def _init_session_state() -> None:
-    """Set slider defaults once, on first run."""
     for key, val in SLIDER_DEFAULTS.items():
-        if key not in st.session_state:
-            st.session_state[key] = val
-    if "metrics" not in st.session_state:
-        st.session_state["metrics"] = None
-    if "last_ticker" not in st.session_state:
-        st.session_state["last_ticker"] = None
+        st.session_state.setdefault(key, val)
+    st.session_state.setdefault("metrics", None)
+    st.session_state.setdefault("selected_ticker", "UPS")
+    st.session_state.setdefault("search_query", "UPS")
+    st.session_state.setdefault("reporting_view", "Full Year")
+    st.session_state.setdefault("is_authenticated", False)
 
 
 def _interp(y1: float, yn: float, n: int = PROJ_YEARS) -> list[float]:
@@ -102,7 +306,6 @@ def _interp(y1: float, yn: float, n: int = PROJ_YEARS) -> list[float]:
 
 
 def _build_base_asm() -> ModelAssumptions:
-    """Construct ModelAssumptions from current sidebar slider session state."""
     s = st.session_state
     n = PROJ_YEARS
     return ModelAssumptions(
@@ -126,7 +329,7 @@ def _build_base_asm() -> ModelAssumptions:
 def _shift_asm(base: ModelAssumptions, g_shift: float, m_shift: float) -> ModelAssumptions:
     asm = copy.deepcopy(base)
     asm.revenue_growth = [min(max(g + g_shift, -0.05), 0.30) for g in base.revenue_growth]
-    asm.gross_margin   = [min(max(m + m_shift, 0.03), 0.85) for m in base.gross_margin]
+    asm.gross_margin = [min(max(m + m_shift, 0.03), 0.85) for m in base.gross_margin]
     return asm
 
 
@@ -134,1173 +337,1039 @@ def _asm_to_json(asm: ModelAssumptions) -> str:
     return json.dumps(dataclasses.asdict(asm), sort_keys=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cached computations
-# ─────────────────────────────────────────────────────────────────────────────
-
-@st.cache_data(show_spinner="Loading historical data…")
-def _load_data(ticker: str, csv_bytes: bytes | None) -> pd.DataFrame:
+@st.cache_data(show_spinner="Loading company data...")
+def _load_data(ticker: str, csv_bytes: bytes | None) -> HistoricalData:
     if csv_bytes:
         hist = load_historical_data(ticker=ticker, csv_path=io.StringIO(csv_bytes.decode()))
     else:
         hist = load_historical_data(ticker=ticker)
-    return hist.df
+    return hist
 
 
-@st.cache_data(show_spinner="Running model…")
+@st.cache_data(show_spinner="Searching tickers...")
+def _search_company_options(query: str):
+    return search_companies(query)
+
+
+@st.cache_data(show_spinner="Loading research data...")
+def _load_research_pack(ticker: str, profile_payload: str | None):
+    profile = None
+    if profile_payload:
+        profile = CompanyProfile(**json.loads(profile_payload))
+    return build_research_pack(ticker, profile=profile)
+
+
+@st.cache_data(show_spinner="Running model...")
 def _run_model(hist_json: str, ticker: str, asm_json: str):
     hist_df = pd.read_json(io.StringIO(hist_json))
-    hist = HistoricalData(ticker=ticker, df=hist_df)
+    hist = HistoricalData(ticker=ticker, df=hist_df, annual_df=hist_df)
     asm = ModelAssumptions(**json.loads(asm_json))
     return run_three_statement_model(hist, asm)
 
 
-@st.cache_data(show_spinner="Running sensitivity analysis (25 scenarios)…")
+@st.cache_data(show_spinner="Running sensitivity analysis...")
 def _run_sensitivity(hist_json: str, ticker: str, asm_json: str, metric: str):
     hist_df = pd.read_json(io.StringIO(hist_json))
-    hist = HistoricalData(ticker=ticker, df=hist_df)
+    hist = HistoricalData(ticker=ticker, df=hist_df, annual_df=hist_df)
     asm = ModelAssumptions(**json.loads(asm_json))
     return build_multi_output_sensitivity(hist, asm, output_metric=metric)
 
 
-@st.cache_data(show_spinner="Building tornado chart…")
+@st.cache_data(show_spinner="Building tornado chart...")
 def _run_tornado(hist_json: str, ticker: str, asm_json: str, metric: str):
     hist_df = pd.read_json(io.StringIO(hist_json))
-    hist = HistoricalData(ticker=ticker, df=hist_df)
+    hist = HistoricalData(ticker=ticker, df=hist_df, annual_df=hist_df)
     asm = ModelAssumptions(**json.loads(asm_json))
     return build_tornado_chart(hist, asm, output_metric=metric)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Reusable chart helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-_LAYOUT = dict(
-    hovermode="x unified",
-    height=370,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=10, r=10, t=50, b=10),
-    plot_bgcolor="white",
-    paper_bgcolor="white",
-)
+def _base_layout(height: int = 370) -> dict:
+    return {
+        "hovermode": "x unified",
+        "height": height,
+        "legend": dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        "margin": dict(l=18, r=18, t=52, b=18),
+        "plot_bgcolor": "rgba(255,255,255,0.72)",
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "font": dict(family="Source Sans 3, sans-serif", color="#1f2933"),
+    }
 
 
-def _line(
-    dfs: dict[str, pd.DataFrame],
-    x: str,
-    y: str,
-    title: str,
-    pct: bool = False,
-) -> go.Figure:
+def _line_chart(dfs: dict[str, pd.DataFrame], x: str, y: str, title: str, pct: bool = False) -> go.Figure:
     fig = go.Figure()
     for name, df in dfs.items():
         vals = df[y]
         texts = [_fp(v) for v in vals] if pct else [_fm(v) for v in vals]
-        fig.add_trace(go.Scatter(
-            x=df[x], y=vals,
-            name=f"{SCENARIO_EMOJI[name]} {name}",
-            mode="lines+markers",
-            line=dict(color=SCENARIO_COLORS[name], width=2.5),
-            marker=dict(size=7),
-            text=texts,
-            hovertemplate="%{text}<extra>%{fullData.name}</extra>",
-        ))
-    fig.update_layout(title=title, **_LAYOUT)
+        fig.add_trace(
+            go.Scatter(
+                x=df[x],
+                y=vals,
+                name=name,
+                mode="lines+markers",
+                line=dict(color=SCENARIO_COLORS[name], width=3),
+                marker=dict(size=7),
+                text=texts,
+                hovertemplate="%{text}<extra>%{fullData.name}</extra>",
+            )
+        )
+    fig.update_layout(title=title, **_base_layout())
     fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0",
-                     tickformat=".0%" if pct else None)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)", tickformat=".0%" if pct else None)
     return fig
 
 
-def _bar_hist(df: pd.DataFrame, x: str, y: str, title: str, color: str = "#351C15") -> go.Figure:
-    fig = go.Figure(go.Bar(
-        x=df[x], y=df[y], marker_color=color,
-        text=[_fm(v) for v in df[y]], textposition="outside",
-        hovertemplate="%{text}<extra></extra>",
-    ))
-    fig.update_layout(title=title, height=320,
-                      margin=dict(l=10, r=10, t=50, b=10),
-                      plot_bgcolor="white", paper_bgcolor="white")
+def _single_line(df: pd.DataFrame, x: str, series: list[tuple[str, str, str]], title: str, pct: bool = False, height: int = 340) -> go.Figure:
+    fig = go.Figure()
+    for key, label, color in series:
+        vals = df[key]
+        fig.add_trace(
+            go.Scatter(
+                x=df[x],
+                y=vals,
+                name=label,
+                mode="lines+markers",
+                line=dict(color=color, width=3),
+                marker=dict(size=7),
+                hovertemplate=("%{y:.1%}" if pct else "%{y:,.0f}") + f"<extra>{label}</extra>",
+            )
+        )
+    fig.update_layout(title=title, **_base_layout(height))
     fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(visible=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)", tickformat=".0%" if pct else None)
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 1: Overview
-# ─────────────────────────────────────────────────────────────────────────────
+def _hero(profile_name: str | None, ticker: str, hist: HistoricalData) -> None:
+    name = profile_name or ticker
+    profile = hist.profile
+    subtitle_bits = []
+    if profile and profile.exchange:
+        subtitle_bits.append(profile.exchange)
+    if profile and profile.sector:
+        subtitle_bits.append(profile.sector)
+    if profile and profile.industry:
+        subtitle_bits.append(profile.industry)
+    subtitle = " • ".join(subtitle_bits) if subtitle_bits else "API-backed financial statements with annual and quarterly views"
 
-def tab_overview(hist_df: pd.DataFrame, ticker: str) -> None:
-    st.markdown(f"""
-    ### What are we modeling?
-    This tool projects **{ticker}'s** financial statements **{PROJ_YEARS} years forward** using
-    historical financials as the base and your custom assumptions about growth, margins, and capital.
-
-    **The 3 linked statements:**
-    - **Income Statement** → Revenue minus all costs = Net Income
-    - **Balance Sheet** → Snapshot of assets owned and liabilities owed (always: Assets = Liabilities + Equity)
-    - **Cash Flow Statement** → Reconciles profit to actual cash (profit ≠ cash!)
-    """)
-
-    st.divider()
-    base = hist_df.sort_values("year").iloc[-1]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Revenue (Latest yr)", _fm(base["revenue"]))
-    c2.metric("Gross Margin", _fp((base["revenue"] - base["cogs"]) / base["revenue"]))
-    c3.metric("Total Debt", _fm(base["debt"]))
-    c4.metric("Cash", _fm(base["cash"]))
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.plotly_chart(
-            _bar_hist(hist_df, "year", "revenue", f"{ticker} — Historical Revenue ($M)"),
-            use_container_width=True,
-        )
-    with col2:
-        h2 = hist_df.copy()
-        h2["Gross Margin"] = (h2["revenue"] - h2["cogs"]) / h2["revenue"]
-        h2["EBIT Margin"] = (
-            h2["revenue"] - h2["cogs"] - h2["opex"] - h2["depreciation"]
-        ) / h2["revenue"]
-        fig = go.Figure()
-        for col, color in [("Gross Margin", "#351C15"), ("EBIT Margin", "#FFB500")]:
-            fig.add_trace(go.Scatter(
-                x=h2["year"], y=h2[col], name=col, mode="lines+markers",
-                line=dict(color=color, width=2.5),
-                text=[_fp(v) for v in h2[col]],
-                hovertemplate="%{text}<extra>" + col + "</extra>",
-            ))
-        fig.update_layout(
-            title=f"{ticker} — Historical Margins",
-            height=320, hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=50, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
-            yaxis=dict(tickformat=".0%", showgrid=True, gridcolor="#f0f0f0"),
-        )
-        fig.update_xaxes(showgrid=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with st.expander("📋 Raw Historical Data", expanded=False):
-        st.dataframe(hist_df, use_container_width=True, hide_index=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 2: Drivers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_drivers(metrics) -> None:
-    if metrics is None:
-        st.info(
-            "Click **🔍 Analyze Company** in the sidebar to auto-populate assumptions "
-            "from historical financials and see detailed driver analysis here."
-        )
-        st.markdown("""
-        #### What are the 5 value drivers?
-        Before building a forecast, you need to understand **what actually drives this business**:
-
-        1. **Revenue Growth** — How fast is demand growing? What's the realistic ceiling?
-        2. **Margins** — How much of each revenue dollar flows to profit?
-        3. **Capital Intensity** — How much CapEx is needed to sustain/grow the business?
-        4. **Working Capital** — How efficiently does the company manage cash tied up in operations?
-        5. **Financing** — What does debt cost? How leveraged is the company?
-
-        After analyzing, this tab will show calculated metrics for each driver with explanations.
-        """)
-        return
-
-    st.markdown("### Historical Performance Analysis")
     st.markdown(
-        "These metrics were automatically calculated from the company's own financial statements. "
-        "They inform the assumption defaults loaded into the model."
+        f"""
+        <div class="hero-card">
+            <div class="small-label">3-Statement Modeling Workspace</div>
+            <div style="font-size: 2rem; font-weight: 700;">{name} <span style="opacity: 0.8;">({ticker})</span></div>
+            <div class="hero-subtle">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Revenue CAGR", _fp(metrics.revenue_growth_cagr))
-    c2.metric("Avg Gross Margin", _fp(metrics.gross_margin_avg))
-    c3.metric("Avg EBITDA Margin", _fp(metrics.ebitda_margin_avg))
-
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Avg Interest Rate", _fp(metrics.interest_rate_avg))
-    c5.metric("Avg Net Leverage", f"{metrics.net_leverage_avg:.1f}x EBITDA")
-    c6.metric("Avg Interest Coverage", f"{metrics.interest_coverage_avg:.1f}x")
-
-    st.divider()
-
-    driver_cards = [
-        ("📈 Revenue Growth",       metrics.growth_note),
-        ("💰 Margins",              metrics.margin_note),
-        ("🏗️ Capital Intensity",   metrics.capex_note),
-        ("🔄 Working Capital",      metrics.wc_note),
-        ("🏦 Financing",            metrics.financing_note),
-    ]
-    for title, note in driver_cards:
-        with st.expander(title, expanded=True):
-            st.markdown(note)
-
-    st.divider()
-    st.markdown("""
-    #### How to interpret these drivers
-    - **Revenue Growth:** A 2–4% CAGR is typical for mature, large-cap companies.
-      Tech and healthcare can sustain 8–15%+. Negative CAGR signals business headwinds.
-    - **Margins:** Higher gross margin = more pricing power or efficiency. EBITDA margins
-      above ~20% are generally strong for most industries.
-    - **Capital Intensity:** Low CapEx/Revenue (< 5%) = asset-light. High (> 10%) = capital-heavy
-      like manufacturing, airlines, or telecom. High CapEx reduces free cash flow.
-    - **Working Capital:** DSO measures how long customers take to pay. DIO measures how long
-      inventory sits. DPO measures how long the company waits to pay suppliers.
-      Cash Conversion Cycle = DSO + DIO − DPO. Lower is better.
-    - **Financing:** Interest rate × Debt = interest burden. Net Debt/EBITDA > 4x is
-      considered highly leveraged. EBIT/Interest < 2x signals covenant risk.
-    """)
+    if profile:
+        cols = st.columns(4)
+        cols[0].metric("Current Price", f"${profile.current_price:,.2f}" if profile.current_price else "N/A")
+        cols[1].metric("Market Cap", _fm(profile.market_cap / 1_000_000) if profile.market_cap else "N/A")
+        cols[2].metric("Enterprise Value", _fm(profile.enterprise_value / 1_000_000) if profile.enterprise_value else "N/A")
+        cols[3].metric("Shares Outstanding", f"{profile.shares_outstanding / 1_000_000:,.0f}M" if profile.shares_outstanding else "N/A")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 3: Income Statement
-# ─────────────────────────────────────────────────────────────────────────────
+def _profile_payload(hist: HistoricalData) -> str | None:
+    if not hist.profile:
+        return None
+    return json.dumps(hist.profile.__dict__)
 
-def tab_income(outputs: dict) -> None:
-    st.markdown("""
-    ### Income Statement
-    Shows how much **profit** the company earns. Flows top-down:
-    **Revenue → Gross Profit → EBITDA → EBIT → EBT → Net Income**
 
-    > **Gross Profit** = Revenue − COGS (cost to make the product/deliver the service)
-    > **EBITDA** = Gross Profit − Operating Expenses (a proxy for operating cash flow)
-    > **EBIT** = EBITDA − Depreciation (accounting cost of using long-lived assets)
-    > **Net Income** = EBIT − Interest − Taxes
-    """)
+def _access_password() -> str | None:
+    return os.getenv("APP_ACCESS_PASSWORD")
+
+
+def _auth_gate() -> bool:
+    password = _access_password()
+    if not password:
+        return True
+    if st.session_state.get("is_authenticated"):
+        return True
+
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="small-label">Private Access</div>
+            <div style="font-size: 2rem; font-weight: 700;">Research Platform Access</div>
+            <div class="hero-subtle">This deployment is protected. Enter the access password to continue.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    entered = st.text_input("Access password", type="password")
+    if st.button("Enter Platform", type="primary", use_container_width=True):
+        if entered == password:
+            st.session_state["is_authenticated"] = True
+            st.rerun()
+        st.error("Incorrect password.")
+    return False
+
+
+def _sidebar_search() -> tuple[str, bytes | None, bool]:
+    with st.sidebar:
+        st.markdown("## Platform")
+        st.caption("Public-facing equity research, forecasting, and valuation workspace")
+        if _access_password():
+            state = "Unlocked" if st.session_state.get("is_authenticated") else "Locked"
+            st.caption(f"Access state: {state}")
+        st.divider()
+        st.markdown("## Company Search")
+        st.caption("Search by company name or ticker. Select a result to load its ticker and logo.")
+        query = st.text_input("Search", key="search_query")
+
+        if len(query.strip()) >= 1:
+            try:
+                results = _search_company_options(query)
+            except Exception as exc:
+                results = []
+                st.caption(f"Search unavailable: {exc}")
+        else:
+            results = []
+
+        for idx, result in enumerate(results[:6]):
+            cols = st.columns([1, 4, 1])
+            with cols[0]:
+                if result.logo_url:
+                    st.image(result.logo_url, width=28)
+            with cols[1]:
+                st.markdown(f"**{result.name}**")
+                st.caption(f"{result.symbol} • {result.exchange}")
+            with cols[2]:
+                if st.button("Use", key=f"use_{result.symbol}_{idx}", use_container_width=True):
+                    st.session_state["selected_ticker"] = result.symbol
+                    st.session_state["search_query"] = result.symbol
+
+        st.divider()
+        ticker = st.text_input("Selected ticker", value=st.session_state.get("selected_ticker", "UPS")).upper()
+        st.session_state["selected_ticker"] = ticker
+
+        uploaded = st.file_uploader(
+            "Or upload historical CSV",
+            type=["csv"],
+            help="CSV uploads currently support full-year rows. API-backed ticker loads support quarterly and full-year views.",
+        )
+        csv_bytes = uploaded.read() if uploaded else None
+
+        st.radio("Historical view", ["Full Year", "Quarterly"], horizontal=True, key="reporting_view")
+        analyze_clicked = st.button("Analyze Company", use_container_width=True, type="primary")
+        st.divider()
+
+        with st.expander("Forecast Assumptions", expanded=True):
+            st.slider("Year 1 Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
+            st.slider(f"Year {PROJ_YEARS} Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
+            st.slider("Year 1 Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
+            st.slider(f"Year {PROJ_YEARS} Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
+            st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
+            st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
+            st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
+
+        with st.expander("Working Capital", expanded=False):
+            st.slider("DSO", 1, 120, step=1, key="dso_days")
+            st.slider("DIO", 1, 120, step=1, key="dio_days")
+            st.slider("DPO", 1, 120, step=1, key="dpo_days")
+
+        with st.expander("Financing", expanded=False):
+            st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
+            st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
+            st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
+            st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
+
+        st.caption("Valuation covers DCF, trading comps, precedents, and LBO. Historical view toggles between annual and quarterly API pulls.")
+
+    return ticker, csv_bytes, analyze_clicked
+
+
+def tab_home(hist: HistoricalData) -> None:
+    name = hist.profile.name if hist.profile else hist.ticker
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="small-label">Public Product Surface</div>
+            <div style="font-size: 2.2rem; font-weight: 700;">Institutional-style research for {name}</div>
+            <div class="hero-subtle">A single website for historical analysis, forecasting, peer work, and valuation.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="landing-grid">
+            <div class="landing-card">
+                <div class="landing-icon">&#9670;</div>
+                <div class="landing-title">Research</div>
+                <div class="landing-copy">Peer comps, analyst targets, earnings history, and precedent headlines feed directly into the modeling workflow.</div>
+            </div>
+            <div class="landing-card">
+                <div class="landing-icon">&#9670;</div>
+                <div class="landing-title">Forecasting</div>
+                <div class="landing-copy">Annual and quarterly history flows into a linked 3-statement model with scenario analysis and driver-based assumptions.</div>
+            </div>
+            <div class="landing-card">
+                <div class="landing-icon">&#9670;</div>
+                <div class="landing-title">Valuation</div>
+                <div class="landing-copy">DCF, trading comps, precedents, and LBO outputs sit side by side so the valuation range is visible in one place.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Historical Views", "Annual + Quarterly")
+    c2.metric("Valuation Methods", "4")
+    c3.metric("Research Mode", "API-backed" if fmp_enabled() else "Ready")
+    c4.metric("Deployment", "Cloud-ready")
+    with st.expander("Website Positioning", expanded=False):
+        st.write(
+            "This app is now structured to work as a real website, not only a local notebook-style dashboard. "
+            "It has a landing surface, an optional access gate, public deployment config, and a broad workflow from search to valuation."
+        )
+        st.write(
+            "If you want a stronger product feel next, the natural follow-up is a dedicated branded homepage, custom domain, "
+            "authentication provider, and saved user workspaces."
+        )
+
+
+def tab_overview(hist: HistoricalData, ticker: str) -> None:
+    report_df, x_col = reporting_frame(hist, st.session_state["reporting_view"])
+    annual_df = hist.annual().copy()
+    base = annual_df.sort_values("year").iloc[-1]
+    x_title = "Quarter" if st.session_state["reporting_view"] == "Quarterly" else "Fiscal Year"
+
+    _glossary(["revenue", "cogs", "gross_profit", "ebitda", "cash", "debt"])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Revenue", _fm(base["revenue"]))
+    c2.metric("Gross Margin", _fp((base["revenue"] - base["cogs"]) / max(base["revenue"], 1)))
+    c3.metric("Cash", _fm(base["cash"]))
+    c4.metric("Debt", _fm(base["debt"]))
+
+    report_df = report_df.copy()
+    report_df["gross_profit"] = report_df["revenue"] - report_df["cogs"]
+    report_df["gross_margin"] = report_df["gross_profit"] / report_df["revenue"].replace(0, pd.NA)
+    report_df["ebitda"] = report_df["revenue"] - report_df["cogs"] - report_df["opex"]
+    report_df["ebitda_margin"] = report_df["ebitda"] / report_df["revenue"].replace(0, pd.NA)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(
-            _line({n: o.income_statement for n, o in outputs.items()},
-                  "year", "revenue", "Revenue — All Scenarios ($M)"),
-            use_container_width=True,
-        )
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=report_df[x_col], y=report_df["revenue"], name="Revenue", marker_color="#0f4c81"))
+        fig.add_trace(go.Bar(x=report_df[x_col], y=-report_df["cogs"], name="COGS", marker_color="#b08968"))
+        fig.update_layout(title=f"Revenue vs. COGS by {x_title}", barmode="relative", **_base_layout(360))
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)")
+        st.plotly_chart(fig, use_container_width=True)
     with col2:
         st.plotly_chart(
-            _line({n: o.income_statement for n, o in outputs.items()},
-                  "year", "ebitda", "EBITDA — All Scenarios ($M)"),
+            _single_line(
+                report_df,
+                x_col,
+                [("gross_margin", "Gross Margin", "#0f4c81"), ("ebitda_margin", "EBITDA Margin", "#2d6a4f")],
+                f"Historical Margins by {x_title}",
+                pct=True,
+                height=360,
+            ),
             use_container_width=True,
         )
 
     col3, col4 = st.columns(2)
     with col3:
         st.plotly_chart(
-            _line({n: o.income_statement for n, o in outputs.items()},
-                  "year", "ebit", "EBIT — All Scenarios ($M)"),
+            _single_line(
+                report_df,
+                x_col,
+                [("cash", "Cash", "#0d7a5f"), ("debt", "Debt", "#a13d2d")],
+                f"Cash and Debt by {x_title}",
+            ),
             use_container_width=True,
         )
     with col4:
+        report_df["nwc"] = report_df["accounts_receivable"] + report_df["inventory"] - report_df["accounts_payable"]
         st.plotly_chart(
-            _line({n: o.income_statement for n, o in outputs.items()},
-                  "year", "net_income", "Net Income — All Scenarios ($M)"),
+            _single_line(
+                report_df,
+                x_col,
+                [("accounts_receivable", "Accounts Receivable", "#0f4c81"), ("inventory", "Inventory", "#b08968"), ("nwc", "Net Working Capital", "#7f5539")],
+                f"Working Capital Build by {x_title}",
+            ),
             use_container_width=True,
         )
 
-    st.divider()
-    scen = st.selectbox("View full table for:", ["Base", "Bull", "Bear"], key="is_scen")
+    with st.expander("Platform Scope", expanded=False):
+        st.write(
+            "This workspace now combines company search, logo/profile context, annual and quarterly history, "
+            "driver analysis, linked-statement forecasting, sensitivity testing, and four valuation methods in one flow."
+        )
+        st.write(
+            "The remaining limitation is data breadth for live peer sets and transaction comps. The current version lets you "
+            "set market-based valuation assumptions directly, but it does not yet ingest a true comparable-company universe."
+        )
+
+    with st.expander("Historical Financial Data", expanded=False):
+        show_cols = [c for c in [x_col, "revenue", "cogs", "opex", "depreciation", "interest_expense", "cash", "debt", "shares_outstanding", "capex"] if c in report_df.columns]
+        st.dataframe(_format_display_df(report_df[show_cols]), use_container_width=True, hide_index=True)
+
+
+def tab_drivers(metrics) -> None:
+    _glossary(["revenue", "gross_profit", "ebitda", "tax_rate", "capex"])
+    if metrics is None:
+        st.info("Click Analyze Company to derive historical operating drivers and seed the model with company-specific defaults.")
+        return
+
+    top = st.columns(6)
+    top[0].metric("Revenue CAGR", _fp(metrics.revenue_growth_cagr))
+    top[1].metric("Avg Gross Margin", _fp(metrics.gross_margin_avg))
+    top[2].metric("Avg EBITDA Margin", _fp(metrics.ebitda_margin_avg))
+    top[3].metric("Avg DSO", f"{metrics.dso_avg:.0f} days")
+    top[4].metric("Avg CapEx %", _fp(metrics.capex_pct_avg))
+    top[5].metric("Avg Net Leverage", f"{metrics.net_leverage_avg:.1f}x")
+
+    notes = [
+        ("Growth", metrics.growth_note),
+        ("Margins", metrics.margin_note),
+        ("Capital Intensity", metrics.capex_note),
+        ("Working Capital", metrics.wc_note),
+        ("Financing", metrics.financing_note),
+    ]
+    for title, note in notes:
+        with st.expander(title, expanded=True):
+            st.write(note)
+
+
+def tab_income(outputs: dict[str, object]) -> None:
+    _glossary(["revenue", "cogs", "gross_profit", "ebitda", "ebit", "net_income", "eps"])
+
+    row1 = st.columns(2)
+    with row1[0]:
+        st.plotly_chart(_line_chart({n: o.income_statement for n, o in outputs.items()}, "year", "revenue", "Revenue"), use_container_width=True)
+    with row1[1]:
+        st.plotly_chart(_line_chart({n: o.income_statement for n, o in outputs.items()}, "year", "ebitda", "EBITDA"), use_container_width=True)
+
+    row2 = st.columns(2)
+    with row2[0]:
+        st.plotly_chart(_line_chart({n: o.income_statement for n, o in outputs.items()}, "year", "ebit", "EBIT"), use_container_width=True)
+    with row2[1]:
+        st.plotly_chart(_line_chart({n: o.income_statement for n, o in outputs.items()}, "year", "net_income", "Net Income"), use_container_width=True)
+
+    scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="income_scen")
     is_df = outputs[scen].income_statement.copy()
-    is_df["gross_margin_%"] = is_df["gross_profit"] / is_df["revenue"]
-    is_df["ebitda_margin_%"] = is_df["ebitda"] / is_df["revenue"]
-    is_df["net_margin_%"] = is_df["net_income"] / is_df["revenue"]
+    is_df["gross_margin_%"] = is_df["gross_profit"] / is_df["revenue"].replace(0, pd.NA)
+    is_df["ebitda_margin_%"] = is_df["ebitda"] / is_df["revenue"].replace(0, pd.NA)
+    is_df["net_margin_%"] = is_df["net_income"] / is_df["revenue"].replace(0, pd.NA)
 
-    display = _millions_df(is_df, exclude=["year", "gross_margin_%", "ebitda_margin_%", "net_margin_%", "eps"])
-    for c in ["gross_margin_%", "ebitda_margin_%", "net_margin_%"]:
-        display[c] = is_df[c].apply(_fp)
-    display["eps"] = is_df["eps"].apply(lambda v: f"${v:.2f}")
-    display.columns = [c.replace("_", " ").title() for c in display.columns]
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.plotly_chart(
+        _single_line(
+            is_df,
+            "year",
+            [("gross_margin_%", "Gross Margin", "#0f4c81"), ("ebitda_margin_%", "EBITDA Margin", "#2d6a4f"), ("net_margin_%", "Net Margin", "#a13d2d")],
+            f"Margin Stack: {scen}",
+            pct=True,
+            height=340,
+        ),
+        use_container_width=True,
+    )
+    st.dataframe(
+        _format_display_df(is_df, pct_cols={"gross_margin_%", "ebitda_margin_%", "net_margin_%"}, per_share_cols={"eps"}),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 4: Balance Sheet
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_balance_sheet(outputs: dict) -> None:
-    st.markdown("""
-    ### Balance Sheet
-    A **snapshot** of what the company owns (assets) and owes (liabilities + equity) at year-end.
-
-    **The fundamental equation:** Total Assets = Total Liabilities + Total Equity *(always)*
-
-    > In this model, equity is computed as the residual (Assets − Liabilities) to ensure
-    > the balance sheet always balances. The "equity rollforward" (NI − Dividends) is tracked
-    > separately as an informational schedule. Any difference is unmodeled balance sheet items
-    > (goodwill, deferred taxes, minority interest, etc.) — normal for simplified models.
-    """)
-
+def tab_balance_sheet(outputs: dict[str, object]) -> None:
+    _glossary(["cash", "accounts_receivable", "inventory", "accounts_payable", "ppne", "debt", "nwc"])
     scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="bs_scen")
     output = outputs[scen]
-    bs = output.balance_sheet
+    bs = output.balance_sheet.copy()
     integ = check_integrity(output)
 
     if integ.all_clear:
-        st.success("✅ All integrity checks passed.")
+        st.success("All integrity checks passed.")
     else:
-        for w in integ.warnings[:6]:
-            st.warning(w)
+        for warning in integ.warnings[:6]:
+            st.warning(warning)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### Total Assets vs. Liabilities + Equity")
         fig = go.Figure()
-        fig.add_trace(go.Bar(
-            name="Total Assets", x=bs["year"], y=bs["total_assets"],
-            marker_color="#2563EB",
-            text=[_fm(v) for v in bs["total_assets"]], textposition="auto",
-        ))
-        fig.add_trace(go.Bar(
-            name="Liabilities + Equity", x=bs["year"], y=bs["total_liabilities_and_equity"],
-            marker_color="#16A34A", opacity=0.75,
-            text=[_fm(v) for v in bs["total_liabilities_and_equity"]], textposition="auto",
-        ))
-        fig.update_layout(
-            barmode="group", height=350,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=20, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
+        for key, label, color in [
+            ("cash", "Cash", "#0d7a5f"),
+            ("accounts_receivable", "Accounts Receivable", "#0f4c81"),
+            ("inventory", "Inventory", "#b08968"),
+            ("ppne", "PP&E", "#7f5539"),
+        ]:
+            fig.add_trace(go.Bar(x=bs["year"], y=bs[key], name=label, marker_color=color))
+        fig.update_layout(title=f"Asset Mix: {scen}", barmode="stack", **_base_layout(360))
         fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)")
         st.plotly_chart(fig, use_container_width=True)
-
     with col2:
-        st.markdown("#### Equity Rollforward (NI − Dividends)")
-        eq = output.equity_schedule
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(
-            name="Beginning Equity", x=eq["year"], y=eq["beginning_equity"],
-            marker_color="#93C5FD",
-        ))
-        fig2.add_trace(go.Bar(
-            name="+ Net Income", x=eq["year"], y=eq["net_income"],
-            marker_color="#4ADE80",
-        ))
-        fig2.add_trace(go.Bar(
-            name="− Dividends", x=eq["year"], y=-eq["dividends"],
-            marker_color="#FCA5A5",
-        ))
-        fig2.add_trace(go.Scatter(
-            name="Ending Equity", x=eq["year"], y=eq["ending_equity"],
-            mode="lines+markers", line=dict(color="#1E40AF", width=3),
-            text=[_fm(v) for v in eq["ending_equity"]],
-            hovertemplate="%{text}<extra>Ending Equity</extra>",
-        ))
-        fig2.update_layout(
-            barmode="relative", height=350,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=20, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
+        st.plotly_chart(
+            _single_line(
+                bs,
+                "year",
+                [("total_assets", "Total Assets", "#0f4c81"), ("total_liabilities_and_equity", "Liabilities + Equity", "#2d6a4f"), ("debt", "Debt", "#a13d2d")],
+                f"Balance Sheet Structure: {scen}",
+                height=360,
+            ),
+            use_container_width=True,
         )
-        fig2.update_xaxes(showgrid=False)
-        fig2.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-        st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown(f"#### Full Balance Sheet — {scen} Scenario")
-    display_cols = [
-        "year", "cash", "accounts_receivable", "inventory", "other_assets", "ppne", "total_assets",
-        "accounts_payable", "debt", "other_liabilities", "total_liabilities",
-        "total_equity", "total_liabilities_and_equity", "bs_plug",
-    ]
-    bs_show = bs[[c for c in display_cols if c in bs.columns]].copy()
-    formatted = _millions_df(bs_show, exclude=["year"])
-    formatted.columns = [c.replace("_", " ").title() for c in formatted.columns]
-    st.dataframe(formatted, use_container_width=True, hide_index=True)
-
-    if integ.year_details:
-        with st.expander("🔍 Integrity Check Detail", expanded=False):
-            _target = ["year", "bs_imbalance_pct", "bs_plug", "cash_diff",
-                       "net_leverage", "interest_coverage"]
-            detail_df = pd.DataFrame(integ.year_details)
-            detail_df = detail_df[[c for c in _target if c in detail_df.columns]]
-            if not detail_df.empty:
-                if "bs_imbalance_pct" in detail_df.columns:
-                    detail_df["bs_imbalance_pct"] = detail_df["bs_imbalance_pct"].apply(
-                        lambda v: f"{v * 100:.2f}%"
-                    )
-                for c in ["bs_plug", "cash_diff"]:
-                    if c in detail_df.columns:
-                        detail_df[c] = detail_df[c].apply(_fm)
-                for c in ["net_leverage"]:
-                    if c in detail_df.columns:
-                        detail_df[c] = detail_df[c].apply(lambda v: f"{v:.1f}x")
-                for c in ["interest_coverage"]:
-                    if c in detail_df.columns:
-                        detail_df[c] = detail_df[c].apply(lambda v: f"{v:.1f}x")
-                detail_df.columns = [c.replace("_", " ").title() for c in detail_df.columns]
-                st.dataframe(detail_df, use_container_width=True, hide_index=True)
+    st.dataframe(_format_display_df(bs), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 5: Cash Flow
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_cash_flow(outputs: dict) -> None:
-    st.markdown("""
-    ### Cash Flow Statement
-    Reconciles **net income to actual cash**. These differ because:
-    - Depreciation is a **non-cash** expense (added back in CFO)
-    - CapEx is a **cash outflow** not on the income statement (shown in CFI)
-    - Working capital changes **tie up or release** cash
-
-    **Three sections:**
-    - **CFO (Operating):** Cash generated running the core business
-    - **CFI (Investing):** Cash used for long-term assets (mainly CapEx)
-    - **CFF (Financing):** Cash from/to debt holders and shareholders (repayments, dividends)
-    """)
+def tab_cash_flow(outputs: dict[str, object]) -> None:
+    _glossary(["cfo", "cfi", "cff", "fcf", "capex", "depreciation", "nwc"])
+    scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="cf_scen")
+    output = outputs[scen]
+    cf = output.cash_flow.copy()
+    fcf = output.fcf.copy()
 
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(
-            _line({n: o.cash_flow for n, o in outputs.items()},
-                  "year", "cfo", "Operating Cash Flow ($M)"),
-            use_container_width=True,
-        )
+        fig = go.Figure()
+        for label, col_name, color in [("CFO", "cfo", "#0f4c81"), ("CFI", "cfi", "#b08968"), ("CFF", "cff", "#7f5539")]:
+            fig.add_trace(go.Bar(x=cf["year"], y=cf[col_name], name=label, marker_color=color))
+        fig.add_trace(go.Scatter(x=cf["year"], y=cf["net_change_cash"], name="Net Change in Cash", mode="lines+markers", line=dict(color="#2d6a4f", width=3)))
+        fig.update_layout(title=f"Cash Flow Components: {scen}", barmode="group", **_base_layout(370))
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)")
+        st.plotly_chart(fig, use_container_width=True)
     with col2:
+        fcf["fcf_conversion"] = fcf["fcf"] / fcf["ebitda"].replace(0, pd.NA)
         st.plotly_chart(
-            _line({n: o.fcf for n, o in outputs.items()},
-                  "year", "fcf", "Free Cash Flow ($M)"),
+            _single_line(
+                fcf,
+                "year",
+                [("fcf", "Free Cash Flow", "#0d7a5f"), ("ebitda", "EBITDA", "#0f4c81")],
+                f"FCF and EBITDA: {scen}",
+                height=370,
+            ),
             use_container_width=True,
         )
 
-    scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="cf_scen")
-    cf = outputs[scen].cash_flow
-
-    fig = go.Figure()
-    for label, col_name, color in [
-        ("CFO", "cfo", "#2563EB"),
-        ("CFI", "cfi", "#F97316"),
-        ("CFF", "cff", "#7C3AED"),
-    ]:
-        fig.add_trace(go.Bar(
-            name=label, x=cf["year"], y=cf[col_name], marker_color=color,
-            text=[_fm(v) for v in cf[col_name]],
-            hovertemplate="%{text}<extra>" + label + "</extra>",
-        ))
-    fig.add_trace(go.Scatter(
-        name="Net Change in Cash", x=cf["year"], y=cf["net_change_cash"],
-        mode="lines+markers", line=dict(color="#374151", width=2.5, dash="dot"),
-        text=[_fm(v) for v in cf["net_change_cash"]],
-        hovertemplate="%{text}<extra>Net Change</extra>",
-    ))
-    fig.update_layout(
-        title=f"Cash Flow Components — {SCENARIO_EMOJI[scen]} {scen}",
-        barmode="group", height=380, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=10, t=50, b=10),
-        plot_bgcolor="white", paper_bgcolor="white",
+    st.plotly_chart(
+        _single_line(
+            fcf,
+            "year",
+            [("fcf_conversion", "FCF / EBITDA", "#a13d2d")],
+            f"FCF Conversion: {scen}",
+            pct=True,
+            height=310,
+        ),
+        use_container_width=True,
     )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-    st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown(f"#### Full Cash Flow Table — {scen}")
-    fmt = _millions_df(cf, exclude=["year"])
-    fmt.columns = [c.replace("_", " ").title() for c in fmt.columns]
-    st.dataframe(fmt, use_container_width=True, hide_index=True)
+    st.dataframe(_format_display_df(cf), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 6: Schedules
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_schedules(outputs: dict, base_asm: ModelAssumptions) -> None:
+def tab_schedules(outputs: dict[str, object], base_asm: ModelAssumptions) -> None:
     scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="sched_scen")
     output = outputs[scen]
+    tabs = st.tabs(["PP&E", "Working Capital", "Debt", "Equity"])
+    base_asm.normalize()
 
-    sub1, sub2, sub3, sub4 = st.tabs([
-        "🏗️ PP&E", "🔄 Working Capital", "🏦 Debt", "📊 Equity Rollforward"
-    ])
-
-    with sub1:
-        st.markdown("""
-        ### PP&E (Property, Plant & Equipment) Schedule
-        **Beginning PP&E + CapEx − Depreciation = Ending PP&E** (each year)
-
-        > **Depreciation** is non-cash — it reduces profit but not cash.
-        > **CapEx** is a cash outflow — it reduces cash but not current-year profit.
-        > Together, they explain how the asset base evolves and why CFO > Net Income in asset-heavy businesses.
-        """)
-        ppe = output.ppe_schedule
+    with tabs[0]:
+        _glossary(["ppne", "capex", "depreciation"])
+        ppe = output.ppe_schedule.copy()
         fig = go.Figure()
-        fig.add_trace(go.Bar(name="Beginning PP&E", x=ppe["year"], y=ppe["beginning_ppne"],
-                             marker_color="#93C5FD"))
-        fig.add_trace(go.Bar(name="+ CapEx", x=ppe["year"], y=ppe["capex"],
-                             marker_color="#FFB500"))
-        fig.add_trace(go.Bar(name="− Depreciation", x=ppe["year"], y=-ppe["depreciation"],
-                             marker_color="#FCA5A5"))
-        fig.add_trace(go.Scatter(name="Ending PP&E", x=ppe["year"], y=ppe["ending_ppne"],
-                                 mode="lines+markers", line=dict(color="#351C15", width=3),
-                                 text=[_fm(v) for v in ppe["ending_ppne"]],
-                                 hovertemplate="%{text}<extra>Ending PP&E</extra>"))
-        fig.update_layout(
-            barmode="relative", height=380,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=20, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
+        fig.add_trace(go.Bar(x=ppe["year"], y=ppe["beginning_ppne"], name="Beginning PP&E", marker_color="#c8d5b9"))
+        fig.add_trace(go.Bar(x=ppe["year"], y=ppe["capex"], name="CapEx", marker_color="#b08968"))
+        fig.add_trace(go.Bar(x=ppe["year"], y=-ppe["depreciation"], name="Depreciation", marker_color="#a13d2d"))
+        fig.add_trace(go.Scatter(x=ppe["year"], y=ppe["ending_ppne"], name="Ending PP&E", mode="lines+markers", line=dict(color="#0f4c81", width=3)))
+        fig.update_layout(title=f"PP&E Schedule: {scen}", barmode="relative", **_base_layout(360))
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(
-            _millions_df(ppe, exclude=["year"]).rename(columns=lambda c: c.replace("_", " ").title()),
-            use_container_width=True, hide_index=True,
+        st.dataframe(_format_display_df(ppe), use_container_width=True, hide_index=True)
+
+    with tabs[1]:
+        _glossary(["accounts_receivable", "inventory", "accounts_payable", "nwc"])
+        wc_df = pd.DataFrame(
+            {
+                "year": output.balance_sheet["year"].tolist(),
+                "dso": base_asm.dso_days[: len(output.balance_sheet)],
+                "dio": base_asm.dio_days[: len(output.balance_sheet)],
+                "dpo": base_asm.dpo_days[: len(output.balance_sheet)],
+            }
         )
-
-    with sub2:
-        st.markdown("""
-        ### Working Capital Schedule
-        - **DSO (Days Sales Outstanding):** How long customers take to pay (AR/Revenue × 365)
-        - **DIO (Days Inventory Outstanding):** How long inventory sits before sold (Inv/COGS × 365)
-        - **DPO (Days Payable Outstanding):** How long the company takes to pay suppliers (AP/COGS × 365)
-
-        **Cash Conversion Cycle = DSO + DIO − DPO** (lower = more cash-efficient)
-        """)
-        base_asm.normalize()
-        years = output.balance_sheet["year"].tolist()
-        wc_data = pd.DataFrame({
-            "year": years,
-            "DSO (days)": base_asm.dso_days[:len(years)],
-            "DIO (days)": base_asm.dio_days[:len(years)],
-            "DPO (days)": base_asm.dpo_days[:len(years)],
-        })
-        fig2 = go.Figure()
-        for col, color in [("DSO (days)", "#2563EB"), ("DIO (days)", "#F97316"), ("DPO (days)", "#16A34A")]:
-            fig2.add_trace(go.Scatter(
-                x=wc_data["year"], y=wc_data[col], name=col, mode="lines+markers",
-                line=dict(color=color, width=2),
-                text=[f"{v:.0f} days" for v in wc_data[col]],
-                hovertemplate="%{text}<extra>" + col + "</extra>",
-            ))
-        fig2.update_layout(
-            title="Working Capital Days", height=320, hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=50, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
+        st.plotly_chart(
+            _single_line(
+                wc_df,
+                "year",
+                [("dso", "DSO", "#0f4c81"), ("dio", "DIO", "#b08968"), ("dpo", "DPO", "#2d6a4f")],
+                f"Working Capital Days: {scen}",
+                height=330,
+            ),
+            use_container_width=True,
         )
-        fig2.update_xaxes(showgrid=False)
-        fig2.update_yaxes(showgrid=True, gridcolor="#f0f0f0", title="Days")
-        st.plotly_chart(fig2, use_container_width=True)
-        bs_wc = output.balance_sheet[
-            ["year", "accounts_receivable", "inventory", "accounts_payable", "nwc"]
-        ].copy()
-        st.dataframe(
-            _millions_df(bs_wc, exclude=["year"]).rename(columns=lambda c: c.replace("_", " ").title()),
-            use_container_width=True, hide_index=True,
+        bs_wc = output.balance_sheet[["year", "accounts_receivable", "inventory", "accounts_payable", "nwc"]].copy()
+        st.dataframe(_format_display_df(bs_wc), use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        _glossary(["debt", "interest_expense", "cash"])
+        debt = output.debt_schedule.copy()
+        st.plotly_chart(
+            _single_line(
+                debt,
+                "year",
+                [("beginning_debt", "Beginning Debt", "#a13d2d"), ("ending_debt", "Ending Debt", "#0f4c81"), ("interest_expense", "Interest Expense", "#7f5539")],
+                f"Debt Schedule: {scen}",
+                height=330,
+            ),
+            use_container_width=True,
         )
+        st.dataframe(_format_display_df(debt), use_container_width=True, hide_index=True)
 
-    with sub3:
-        st.markdown("""
-        ### Debt Schedule
-        **Beginning Debt − Scheduled Repayment ± Cash Sweep = Ending Debt**
-
-        > **Cash sweep:** If projected cash exceeds 1.5× minimum buffer, excess automatically pays down debt.
-        > If cash falls below minimum, a debt draw fills the gap. This mimics real treasury management.
-        """)
-        debt = output.debt_schedule
-        fig3 = go.Figure()
-        fig3.add_trace(go.Bar(name="Beginning Debt", x=debt["year"], y=debt["beginning_debt"],
-                              marker_color="#FCA5A5"))
-        fig3.add_trace(go.Bar(name="+ Draw", x=debt["year"], y=debt["debt_draw"],
-                              marker_color="#F97316"))
-        fig3.add_trace(go.Bar(name="− Repayment", x=debt["year"], y=-debt["debt_repayment"],
-                              marker_color="#4ADE80"))
-        fig3.add_trace(go.Scatter(name="Ending Debt", x=debt["year"], y=debt["ending_debt"],
-                                  mode="lines+markers", line=dict(color="#DC2626", width=3),
-                                  text=[_fm(v) for v in debt["ending_debt"]],
-                                  hovertemplate="%{text}<extra>Ending Debt</extra>"))
-        fig3.update_layout(
-            barmode="relative", height=380,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=20, b=10),
-            plot_bgcolor="white", paper_bgcolor="white",
-        )
-        fig3.update_xaxes(showgrid=False)
-        fig3.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-        st.plotly_chart(fig3, use_container_width=True)
-        st.dataframe(
-            _millions_df(debt, exclude=["year"]).rename(columns=lambda c: c.replace("_", " ").title()),
-            use_container_width=True, hide_index=True,
-        )
-
-    with sub4:
-        st.markdown("""
-        ### Equity Rollforward
-        **Beginning Equity + Net Income − Dividends = Ending Equity** (each year)
-
-        > Note: This rollforward starts from historical equity and compounds forward via retained earnings.
-        > The balance sheet shows equity as a "plug" (Assets − Liabilities), which may differ from
-        > the rollforward due to unmodeled items. The difference is shown as **bs_plug**.
-        """)
-        eq = output.equity_schedule
-        st.dataframe(
-            _millions_df(eq, exclude=["year"]).rename(columns=lambda c: c.replace("_", " ").title()),
-            use_container_width=True, hide_index=True,
-        )
+    with tabs[3]:
+        eq = output.equity_schedule.copy()
+        st.dataframe(_format_display_df(eq), use_container_width=True, hide_index=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 7: Sensitivity
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_sensitivity(
-    outputs: dict,
-    hist_df: pd.DataFrame,
-    ticker: str,
-    base_asm: ModelAssumptions,
-) -> None:
-    st.markdown("""
-    ### Sensitivity & Scenario Analysis
-    Stress-test the model by shocking assumptions to see which ones drive the most value.
-    """)
-
+def tab_sensitivity(outputs: dict[str, object], hist_df: pd.DataFrame, ticker: str, base_asm: ModelAssumptions) -> None:
     metric = st.selectbox(
-        "Output metric",
+        "Sensitivity metric",
         ["fcf", "ebitda", "net_income"],
         format_func=lambda x: {"fcf": "Free Cash Flow", "ebitda": "EBITDA", "net_income": "Net Income"}[x],
         key="sens_metric",
     )
     metric_label = {"fcf": "FCF", "ebitda": "EBITDA", "net_income": "Net Income"}[metric]
+    _glossary(["fcf", "ebitda", "net_income"])
 
-    c1, c2, c3 = st.columns(3)
-    for col, name in zip([c1, c2, c3], ["Base", "Bull", "Bear"]):
-        df = outputs[name].fcf if metric == "fcf" else outputs[name].income_statement
-        col_key = "fcf" if metric == "fcf" else metric
-        val = df[col_key].mean()
-        col.metric(f"{SCENARIO_EMOJI[name]} {name} — Avg {metric_label}", _fm(val))
-
-    st.divider()
-    st.markdown("""
-    #### 2D Sensitivity Heatmap
-    Shows **average projected output** when revenue growth and gross margin are shifted simultaneously.
-    Each cell = a separate model run with those shocks applied every year.
-    """)
+    cols = st.columns(3)
+    for col, name in zip(cols, ["Base", "Bull", "Bear"]):
+        frame = outputs[name].fcf if metric == "fcf" else outputs[name].income_statement
+        col_name = "fcf" if metric == "fcf" else metric
+        col.metric(f"{name} Avg {metric_label}", _fm(frame[col_name].mean()))
 
     hist_json = hist_df.to_json()
     asm_json = _asm_to_json(base_asm)
     sens_df = _run_sensitivity(hist_json, ticker, asm_json, metric)
+    tornado_df = _run_tornado(hist_json, ticker, asm_json, metric)
 
-    z = sens_df.values.astype(float)
-    fig = px.imshow(
-        z,
+    heat = px.imshow(
+        sens_df.values.astype(float),
         x=[f"{v:+.0%}" for v in sens_df.columns],
         y=[f"{v:+.0%}" for v in sens_df.index],
-        color_continuous_scale="RdYlGn",
+        color_continuous_scale=["#a13d2d", "#f3e9dc", "#2d6a4f"],
         text_auto=".0f",
-        labels={
-            "x": "Gross Margin Shock",
-            "y": "Revenue Growth Shock",
-            "color": f"Avg {metric_label} ($M)",
-        },
-        title=f"Sensitivity: Avg {metric_label} ($M) — Revenue Growth × Gross Margin",
+        labels={"x": "Gross Margin Shock", "y": "Revenue Growth Shock", "color": f"Avg {metric_label}"},
+        title=f"Sensitivity: Avg {metric_label}",
     )
-    fig.update_traces(texttemplate="$%{z:,.0f}M", textfont_size=11)
-    fig.update_layout(height=380, margin=dict(l=10, r=10, t=50, b=10))
+    heat.update_layout(**_base_layout(370))
+    st.plotly_chart(heat, use_container_width=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=tornado_df["assumption"], x=tornado_df["high_vs_base"], name="High case", orientation="h", marker_color="#2d6a4f"))
+    fig.add_trace(go.Bar(y=tornado_df["assumption"], x=tornado_df["low_vs_base"], name="Low case", orientation="h", marker_color="#a13d2d"))
+    fig.update_layout(title=f"Tornado: Impact on Avg {metric_label}", barmode="overlay", **_base_layout(max(320, len(tornado_df) * 44)))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.divider()
-    st.markdown("""
-    #### Tornado Chart — What Matters Most?
-    Each assumption is shocked by ±10% and the resulting change in average output is measured.
-    **Longer bars = bigger leverage point.** Focus model scrutiny on the longest bars.
-    """)
 
-    tornado_df = _run_tornado(hist_json, ticker, asm_json, metric)
-    # Already sorted ascending by impact_range — plotly h-bar puts first item at BOTTOM,
-    # so smallest impact is at bottom and largest impact at top (correct tornado orientation)
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        y=tornado_df["assumption"],
-        x=tornado_df["high_vs_base"],
-        name="High shock (+10%)",
-        orientation="h",
-        marker_color="#16A34A",
-        text=[_fm(abs(v)) for v in tornado_df["high_vs_base"]],
-        textposition="outside",
-    ))
-    fig2.add_trace(go.Bar(
-        y=tornado_df["assumption"],
-        x=tornado_df["low_vs_base"],
-        name="Low shock (−10%)",
-        orientation="h",
-        marker_color="#DC2626",
-        text=[_fm(abs(v)) for v in tornado_df["low_vs_base"]],
-        textposition="outside",
-    ))
-    fig2.update_layout(
-        barmode="overlay",
-        title=f"Tornado: Impact on Avg {metric_label} vs. Base ($M)",
-        height=max(300, len(tornado_df) * 55),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=120, t=50, b=10),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
-        yaxis=dict(showgrid=False),
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 8: Valuation (DCF)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def tab_valuation(outputs: dict, hist_df: pd.DataFrame) -> None:
-    st.markdown("""
-    ### DCF Valuation
-    The **Discounted Cash Flow (DCF)** model values the company as the present value of all
-    future free cash flows, discounted at the **WACC** (cost of capital).
-
-    > **WACC** = the blended return required by equity + debt investors. Higher WACC → lower value.
-    > Typical public company WACC: 7–12%. Use the lower end for stable businesses, higher for riskier ones.
-
-    > **Terminal Value** = value of all cash flows beyond Year 5, modeled as a growing perpetuity:
-    > `TV = FCF_Year5 × (1 + g) / (WACC − g)`. Terminal value typically represents 60–80% of EV.
-    """)
-
-    col_w, col_g = st.columns(2)
-    with col_w:
-        wacc = st.slider(
-            "WACC (cost of capital)", 0.05, 0.18, float(st.session_state.get("wacc", 0.09)),
-            step=0.005, format="%.1f%%", key="wacc_slider",
-        )
-    with col_g:
-        tg = st.slider(
-            "Terminal Growth Rate", 0.00, 0.05,
-            float(st.session_state.get("term_growth", 0.025)),
-            step=0.005, format="%.1f%%", key="tg_slider",
-        )
-
-    if wacc <= tg:
-        st.error("⚠️ WACC must be greater than Terminal Growth Rate for a finite DCF to work.")
-        return
+def tab_valuation(outputs: dict[str, object], hist: HistoricalData) -> None:
+    research = None
+    if fmp_enabled():
+        try:
+            research = _load_research_pack(hist.ticker, _profile_payload(hist))
+        except Exception:
+            research = None
 
     scen = st.selectbox("Scenario to value", ["Base", "Bull", "Bear"], key="val_scen")
     output = outputs[scen]
-    fcf_list = output.fcf["fcf"].tolist()
-    ebitda_list = output.fcf["ebitda"].tolist()
-    bs_last = output.balance_sheet.iloc[-1]
-    net_debt = float(bs_last["debt"]) - float(bs_last["cash"])
-    shares = float(hist_df.sort_values("year").iloc[-1]["shares_outstanding"])
+    annual_df = hist.annual().sort_values("year")
+    latest_hist = annual_df.iloc[-1]
+    is_last = output.income_statement.iloc[-1]
+    fcf_df = output.fcf.copy()
+    fcf_list = fcf_df["fcf"].tolist()
+    ebitda_list = fcf_df["ebitda"].tolist()
+    shares = _safe_float(latest_hist["shares_outstanding"])
+    net_debt = _safe_float(output.balance_sheet.iloc[-1]["debt"]) - _safe_float(output.balance_sheet.iloc[-1]["cash"])
+    revenue = _safe_float(is_last["revenue"])
+    ebitda = _safe_float(is_last["ebitda"])
+    eps = _safe_float(is_last["eps"])
 
-    try:
-        result = run_dcf(fcf_list, ebitda_list, wacc, tg, net_debt, shares)
-    except ValueError as e:
-        st.error(str(e))
+    current_ev = _safe_float(hist.profile.enterprise_value if hist.profile else None)
+    current_price = _safe_float(hist.profile.current_price if hist.profile else None)
+    comp_ev_rev_default = current_ev / revenue if current_ev and revenue else 2.0
+    comp_ev_ebitda_default = current_ev / ebitda if current_ev and ebitda else 9.0
+    comp_pe_default = current_price / eps if current_price and eps > 0 else 18.0
+    if research and research.peers:
+        peer_df = pd.DataFrame([p.__dict__ for p in research.peers])
+        if "ev_revenue" in peer_df.columns and peer_df["ev_revenue"].notna().any():
+            comp_ev_rev_default = float(peer_df["ev_revenue"].dropna().median())
+        if "ev_ebitda" in peer_df.columns and peer_df["ev_ebitda"].notna().any():
+            comp_ev_ebitda_default = float(peer_df["ev_ebitda"].dropna().median())
+        if "pe_ratio" in peer_df.columns and peer_df["pe_ratio"].notna().any():
+            comp_pe_default = float(peer_df["pe_ratio"].dropna().median())
+
+    colw, colg = st.columns(2)
+    with colw:
+        wacc = st.slider("WACC", 0.05, 0.18, float(st.session_state.get("wacc", 0.09)), step=0.005, format="%.1f%%")
+    with colg:
+        tg = st.slider("Terminal Growth", 0.00, 0.05, float(st.session_state.get("term_growth", 0.025)), step=0.005, format="%.1f%%")
+
+    if wacc <= tg:
+        st.error("WACC must be greater than terminal growth.")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Enterprise Value", _fm(result.enterprise_value))
-    c2.metric("Less: Net Debt", _fm(result.net_debt))
-    c3.metric("Equity Value", _fm(result.equity_value))
-    c4.metric("Value per Share", f"${result.value_per_share:,.2f}")
+    try:
+        dcf_result = run_dcf(fcf_list, ebitda_list, wacc, tg, net_debt, shares)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
 
-    c5, c6, c7, c8 = st.columns(4)
-    c5.metric("PV of FCFs (Yr 1–5)", _fm(result.pv_fcf_sum))
-    c6.metric("PV of Terminal Value", _fm(result.pv_terminal_value))
-    c7.metric("Terminal Value % of EV", _fp(result.tv_pct_of_ev))
-    c8.metric("Implied EV / EBITDA", f"{result.implied_ev_ebitda:.1f}x")
+    st.markdown("#### Trading Comps")
+    _glossary(["enterprise_value", "equity_value", "value_per_share", "revenue", "ebitda", "eps"])
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        comp_ev_rev = st.slider("EV / Revenue", 0.5, 12.0, float(min(max(comp_ev_rev_default, 0.5), 12.0)), step=0.1)
+    with c2:
+        comp_ev_ebitda = st.slider("EV / EBITDA", 2.0, 25.0, float(min(max(comp_ev_ebitda_default, 2.0), 25.0)), step=0.25)
+    with c3:
+        comp_pe = st.slider("P / E", 5.0, 40.0, float(min(max(comp_pe_default, 5.0), 40.0)), step=0.5)
 
-    # DCF waterfall
-    st.markdown("#### DCF Bridge: From FCFs to Equity Value")
-    fig_w = go.Figure(go.Waterfall(
-        name="DCF Bridge",
-        orientation="v",
-        measure=["relative", "relative", "total", "relative", "total"],
-        x=["PV of FCFs\n(Yr 1–5)", "PV of Terminal\nValue", "Enterprise\nValue",
-           "Less:\nNet Debt", "Equity\nValue"],
-        y=[result.pv_fcf_sum, result.pv_terminal_value, 0, -result.net_debt, 0],
-        text=[_fm(result.pv_fcf_sum), _fm(result.pv_terminal_value), _fm(result.enterprise_value),
-              _fm(-result.net_debt), _fm(result.equity_value)],
-        textposition="outside",
-        connector={"line": {"color": "#94A3B8"}},
-        increasing={"marker": {"color": "#16A34A"}},
-        decreasing={"marker": {"color": "#DC2626"}},
-        totals={"marker": {"color": "#2563EB"}},
-    ))
-    fig_w.update_layout(
-        height=400, margin=dict(l=10, r=10, t=30, b=10),
-        plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+    comps_results = [
+        run_multiple_valuation("Trading EV / Revenue", revenue, comp_ev_rev, net_debt, shares, "Revenue"),
+        run_multiple_valuation("Trading EV / EBITDA", ebitda, comp_ev_ebitda, net_debt, shares, "EBITDA"),
+        run_multiple_valuation("Trading P / E", max(eps, 0.0) * shares, comp_pe, 0.0, shares, "Net Income"),
+    ]
+
+    st.markdown("#### Precedent Transactions")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        precedent_rev = st.slider("Precedent EV / Revenue", 0.5, 14.0, float(min(max(comp_ev_rev + 0.4, 0.5), 14.0)), step=0.1)
+    with p2:
+        precedent_ebitda = st.slider("Precedent EV / EBITDA", 2.0, 30.0, float(min(max(comp_ev_ebitda + 1.0, 2.0), 30.0)), step=0.25)
+    with p3:
+        control_premium = st.slider("Control Premium", 0.0, 0.50, 0.25, step=0.01, format="%.0f%%")
+
+    precedent_results = run_precedent_transactions(revenue, ebitda, net_debt, shares, precedent_rev, precedent_ebitda, control_premium)
+
+    st.markdown("#### LBO")
+    l1, l2, l3, l4 = st.columns(4)
+    with l1:
+        entry_multiple = st.slider("Entry EV / EBITDA", 4.0, 18.0, float(min(max(comp_ev_ebitda, 4.0), 18.0)), step=0.25)
+    with l2:
+        exit_multiple = st.slider("Exit EV / EBITDA", 4.0, 18.0, float(min(max(comp_ev_ebitda - 0.5, 4.0), 18.0)), step=0.25)
+    with l3:
+        debt_multiple = st.slider("Debt / EBITDA", 1.0, 8.0, 4.5, step=0.25)
+    with l4:
+        lbo_rate = st.slider("LBO Interest Rate", 0.04, 0.16, float(st.session_state.get("int_rate", 0.08)), step=0.005, format="%.1f%%")
+
+    lbo_result = run_lbo(ebitda_list, fcf_list, net_debt, shares, entry_multiple, exit_multiple, debt_multiple, lbo_rate)
+    summary = valuation_summary_table(dcf_result, comps_results, precedent_results, lbo_result)
+
+    with st.expander("Valuation Framework", expanded=False):
+        st.write("DCF values projected free cash flow using WACC and terminal growth.")
+        st.write("Trading comps translate market multiples into implied enterprise and equity value.")
+        st.write("Precedent transactions apply takeover-style multiples plus a control premium.")
+        st.write("LBO estimates what a sponsor could pay while still reaching an acceptable exit return.")
+
+    top = st.columns(4)
+    top[0].metric("DCF Per Share", f"${dcf_result.value_per_share:,.2f}")
+    top[1].metric("Comps Midpoint", f"${pd.Series([r.value_per_share for r in comps_results]).median():,.2f}")
+    top[2].metric("Precedent Midpoint", f"${pd.Series([r.value_per_share for r in precedent_results]).median():,.2f}")
+    top[3].metric("LBO Per Share", f"${lbo_result.value_per_share:,.2f}")
+
+    fig = go.Figure(
+        go.Bar(
+            x=summary["Method"],
+            y=summary["Per Share"],
+            marker_color=VALUE_METHOD_COLORS[: len(summary)],
+            text=[f"${v:,.2f}" for v in summary["Per Share"]],
+            textposition="outside",
+        )
     )
-    st.plotly_chart(fig_w, use_container_width=True)
+    fig.update_layout(title=f"Valuation Range by Method: {scen}", **_base_layout(380))
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(31,41,51,0.08)")
+    st.plotly_chart(fig, use_container_width=True)
 
-    col_p1, col_p2 = st.columns([1, 1])
-    with col_p1:
-        pie_vals = [max(result.pv_fcf_sum, 0), max(result.pv_terminal_value, 0)]
-        if sum(pie_vals) > 0:
-            fig_pie = px.pie(
-                names=["Near-term FCFs (Yr 1–5)", "Terminal Value"],
-                values=pie_vals,
-                title="EV Composition",
-                color_discrete_sequence=["#2563EB", "#FFB500"],
-                hole=0.4,
-            )
-            fig_pie.update_layout(height=300, margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig_pie, use_container_width=True)
-    with col_p2:
-        tv_pct = result.tv_pct_of_ev * 100
-        st.markdown(f"""
-        **Terminal Value is {tv_pct:.0f}% of Enterprise Value.**
+    bridge = go.Figure(
+        go.Waterfall(
+            orientation="v",
+            measure=["relative", "relative", "total", "relative", "total"],
+            x=["PV of FCF", "PV of Terminal Value", "Enterprise Value", "Net Debt", "Equity Value"],
+            y=[dcf_result.pv_fcf_sum, dcf_result.pv_terminal_value, 0, -dcf_result.net_debt, 0],
+            increasing={"marker": {"color": "#2d6a4f"}},
+            decreasing={"marker": {"color": "#a13d2d"}},
+            totals={"marker": {"color": "#0f4c81"}},
+        )
+    )
+    bridge.update_layout(title="DCF Bridge", **_base_layout(370))
 
-        - **< 50%:** Unusual — near-term cash flows dominate (very high early FCF)
-        - **60–80%:** Normal for mature, profitable businesses ✓
-        - **> 85%:** Terminal value dominates — be careful with growth assumptions,
-          since a small change in terminal growth rate will swing the valuation significantly
-        """)
-
-    # WACC × Terminal Growth sensitivity grid
-    st.markdown("#### Equity Value per Share — WACC × Terminal Growth Sensitivity")
-    st.markdown("How sensitive is valuation to your two most important DCF inputs?")
-    with st.spinner("Building sensitivity grid…"):
-        sens_grid = wacc_terminal_sensitivity(fcf_list, ebitda_list, net_debt, shares)
-    z_grid = sens_grid.values.astype(float)
-    fig_heat = px.imshow(
-        z_grid,
-        x=[f"{v:.1%}" for v in sens_grid.columns],
-        y=[f"{v:.0%}" for v in sens_grid.index],
-        color_continuous_scale="RdYlGn",
+    heat = px.imshow(
+        wacc_terminal_sensitivity(fcf_list, ebitda_list, net_debt, shares).values.astype(float),
+        x=[f"{v:.1%}" for v in wacc_terminal_sensitivity(fcf_list, ebitda_list, net_debt, shares).columns],
+        y=[f"{v:.0%}" for v in wacc_terminal_sensitivity(fcf_list, ebitda_list, net_debt, shares).index],
+        color_continuous_scale=["#a13d2d", "#f3e9dc", "#2d6a4f"],
         text_auto=".1f",
-        labels={"x": "Terminal Growth Rate", "y": "WACC", "color": "Per Share ($)"},
-        title="Value per Share ($) — WACC × Terminal Growth",
+        labels={"x": "Terminal Growth", "y": "WACC", "color": "Per Share"},
+        title="DCF Sensitivity Grid",
     )
-    fig_heat.update_traces(texttemplate="$%{z:.1f}", textfont_size=11)
-    fig_heat.update_layout(height=420, margin=dict(l=10, r=10, t=50, b=10))
-    st.plotly_chart(fig_heat, use_container_width=True)
+    heat.update_layout(**_base_layout(370))
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.plotly_chart(bridge, use_container_width=True)
+    with col2:
+        st.plotly_chart(heat, use_container_width=True)
+
+    st.dataframe(_format_display_df(summary, per_share_cols={"Per Share"}), use_container_width=True, hide_index=True)
+
+    lbo_cols = st.columns(5)
+    lbo_cols[0].metric("LBO Entry EV", _fm(lbo_result.entry_ev))
+    lbo_cols[1].metric("Debt Funding", _fm(lbo_result.debt_funding))
+    lbo_cols[2].metric("Sponsor Equity", _fm(lbo_result.sponsor_equity))
+    lbo_cols[3].metric("MOIC", f"{lbo_result.moic:.2f}x")
+    lbo_cols[4].metric("IRR", _fp(lbo_result.irr))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 9: Interpretation
-# ─────────────────────────────────────────────────────────────────────────────
+def tab_research(hist: HistoricalData) -> None:
+    st.markdown("### Research Workspace")
+    if not fmp_enabled():
+        st.info("Set `FMP_API_KEY` to enable live peer comps, analyst data, earnings events, and precedent transaction feeds.")
+        return
 
-def tab_interpretation(outputs: dict, ticker: str, metrics) -> None:
-    st.markdown("### Model Interpretation")
-    st.markdown(
-        "Auto-generated analysis based on the model's projected outputs. "
-        "Use this as a starting framework — always overlay with qualitative business judgment."
-    )
+    try:
+        research = _load_research_pack(hist.ticker, _profile_payload(hist))
+    except Exception as exc:
+        st.warning(f"Research data is unavailable right now: {exc}")
+        return
 
-    scen = st.selectbox("Scenario to interpret", ["Base", "Bull", "Bear"], key="interp_scen")
+    st.caption(f"Provider: {research.provider}")
+
+    tabs = st.tabs(["Peer Comps", "Analyst View", "Earnings", "Precedents"])
+
+    with tabs[0]:
+        if not research.peers:
+            st.info("No peer set returned by the market-data provider.")
+        else:
+            peer_df = pd.DataFrame([peer.__dict__ for peer in research.peers])
+            top = st.columns(4)
+            top[0].metric("Peer Count", f"{len(peer_df)}")
+            top[1].metric("Median EV / Revenue", f"{peer_df['ev_revenue'].dropna().median():.1f}x" if peer_df["ev_revenue"].notna().any() else "N/A")
+            top[2].metric("Median EV / EBITDA", f"{peer_df['ev_ebitda'].dropna().median():.1f}x" if peer_df["ev_ebitda"].notna().any() else "N/A")
+            top[3].metric("Median P / E", f"{peer_df['pe_ratio'].dropna().median():.1f}x" if peer_df["pe_ratio"].notna().any() else "N/A")
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=peer_df["symbol"], y=peer_df["ev_ebitda"], name="EV / EBITDA", marker_color="#0f4c81"))
+            fig.add_trace(go.Scatter(x=peer_df["symbol"], y=peer_df["ev_revenue"], name="EV / Revenue", mode="lines+markers", line=dict(color="#b08968", width=3)))
+            fig.update_layout(title="Peer Trading Multiples", **_base_layout(360))
+            st.plotly_chart(fig, use_container_width=True)
+
+            show_cols = ["symbol", "name", "sector", "industry", "market_cap", "enterprise_value", "price", "ev_revenue", "ev_ebitda", "pe_ratio"]
+            formatted = peer_df[show_cols].copy()
+            for col in ["market_cap", "enterprise_value"]:
+                formatted[col] = formatted[col].apply(lambda v: _fm(v / 1_000_000) if pd.notna(v) else "—")
+            formatted["price"] = formatted["price"].apply(lambda v: f"${v:,.2f}" if pd.notna(v) else "—")
+            for col in ["ev_revenue", "ev_ebitda", "pe_ratio"]:
+                formatted[col] = formatted[col].apply(lambda v: f"{v:.1f}x" if pd.notna(v) else "—")
+            formatted.columns = ["Ticker", "Company", "Sector", "Industry", "Market Cap", "Enterprise Value", "Price", "EV / Revenue", "EV / EBITDA", "P / E"]
+            st.dataframe(formatted, use_container_width=True, hide_index=True)
+
+    with tabs[1]:
+        snap = research.analyst_snapshot
+        if snap is None:
+            st.info("No analyst snapshot returned.")
+        else:
+            top = st.columns(5)
+            top[0].metric("Consensus PT", f"${snap.target_consensus:,.2f}" if snap.target_consensus else "N/A")
+            top[1].metric("Median PT", f"${snap.target_median:,.2f}" if snap.target_median else "N/A")
+            top[2].metric("High PT", f"${snap.target_high:,.2f}" if snap.target_high else "N/A")
+            top[3].metric("Low PT", f"${snap.target_low:,.2f}" if snap.target_low else "N/A")
+            top[4].metric("Analysts", f"{snap.analyst_count}" if snap.analyst_count else "N/A")
+
+            est_df = pd.DataFrame(
+                [
+                    {"Period": "Current Year", "Revenue Estimate": snap.revenue_estimate_current_year, "EPS Estimate": snap.eps_estimate_current_year},
+                    {"Period": "Next Year", "Revenue Estimate": snap.revenue_estimate_next_year, "EPS Estimate": snap.eps_estimate_next_year},
+                ]
+            )
+            est_df["Revenue Estimate"] = est_df["Revenue Estimate"].apply(lambda v: _fm(v / 1_000_000) if pd.notna(v) and v else "—")
+            est_df["EPS Estimate"] = est_df["EPS Estimate"].apply(lambda v: f"${v:,.2f}" if pd.notna(v) and v else "—")
+            st.dataframe(est_df, use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        if not research.earnings_events:
+            st.info("No earnings events returned.")
+        else:
+            earn_df = pd.DataFrame([event.__dict__ for event in research.earnings_events])
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=earn_df["date"], y=earn_df["eps_estimated"], name="Estimated EPS", marker_color="#b08968"))
+            fig.add_trace(go.Bar(x=earn_df["date"], y=earn_df["eps_actual"], name="Actual EPS", marker_color="#0f4c81"))
+            fig.update_layout(title="Recent Earnings: Estimated vs Actual EPS", barmode="group", **_base_layout(340))
+            st.plotly_chart(fig, use_container_width=True)
+            for col in ["eps_estimated", "eps_actual"]:
+                earn_df[col] = earn_df[col].apply(lambda v: f"${v:,.2f}" if pd.notna(v) else "—")
+            for col in ["revenue_estimated", "revenue_actual"]:
+                earn_df[col] = earn_df[col].apply(lambda v: _fm(v / 1_000_000) if pd.notna(v) and v else "—")
+            earn_df.columns = ["Date", "Estimated EPS", "Actual EPS", "Estimated Revenue", "Actual Revenue", "Fiscal Period End"]
+            st.dataframe(earn_df, use_container_width=True, hide_index=True)
+
+    with tabs[3]:
+        if not research.precedents:
+            st.info("No relevant precedent transactions returned.")
+        else:
+            prec_df = pd.DataFrame([event.__dict__ for event in research.precedents])
+            prec_df.columns = ["Published Date", "Headline", "Link"]
+            st.dataframe(prec_df, use_container_width=True, hide_index=True)
+
+
+def tab_interpretation(outputs: dict[str, object], ticker: str, metrics) -> None:
+    scen = st.selectbox("Scenario", ["Base", "Bull", "Bear"], key="interp_scen")
     output = outputs[scen]
     is_df = output.income_statement
     bs_df = output.balance_sheet
     fcf_df = output.fcf
-    n = len(is_df)
 
-    # Computed values
     rev_y1 = is_df["revenue"].iloc[0]
     rev_yn = is_df["revenue"].iloc[-1]
-    rev_cagr = (rev_yn / rev_y1) ** (1 / max(n - 1, 1)) - 1 if rev_y1 > 0 and n > 1 else 0
-
+    rev_cagr = (rev_yn / rev_y1) ** (1 / max(len(is_df) - 1, 1)) - 1 if rev_y1 > 0 and len(is_df) > 1 else 0
     gm_y1 = is_df["gross_profit"].iloc[0] / is_df["revenue"].iloc[0]
     gm_yn = is_df["gross_profit"].iloc[-1] / is_df["revenue"].iloc[-1]
-
     avg_fcf = fcf_df["fcf"].mean()
     avg_ebitda = is_df["ebitda"].mean()
     fcf_conv = avg_fcf / avg_ebitda if avg_ebitda > 0 else 0
+    lev_y1 = (bs_df.iloc[0]["debt"] - bs_df.iloc[0]["cash"]) / max(is_df["ebitda"].iloc[0], 1)
+    lev_yn = (bs_df.iloc[-1]["debt"] - bs_df.iloc[-1]["cash"]) / max(is_df["ebitda"].iloc[-1], 1)
 
-    bs_y1 = bs_df.iloc[0]
-    bs_yn = bs_df.iloc[-1]
-    lev_y1 = (bs_y1["debt"] - bs_y1["cash"]) / is_df["ebitda"].iloc[0] if is_df["ebitda"].iloc[0] > 0 else 0
-    lev_yn = (bs_yn["debt"] - bs_yn["cash"]) / is_df["ebitda"].iloc[-1] if is_df["ebitda"].iloc[-1] > 0 else 0
-
-    ebit_yn = is_df["ebit"].iloc[-1]
-    int_yn = is_df["interest_expense"].iloc[-1]
-    cov_yn = ebit_yn / int_yn if int_yn > 0 else 999
-
-    integ = check_integrity(output)
-
-    # Narrative labels
-    margin_dir = ("expanding" if gm_yn > gm_y1 + 0.005
-                  else "compressing" if gm_yn < gm_y1 - 0.005
-                  else "stable")
-    lev_dir = "declining" if lev_yn < lev_y1 - 0.2 else "rising" if lev_yn > lev_y1 + 0.2 else "stable"
-    cov_risk = "low" if cov_yn > 3 else ("medium" if cov_yn > 1.5 else "high")
-
-    st.divider()
-    st.markdown(f"""
-    #### 📈 Revenue & Growth
-    **{ticker}** projects revenue growing from **{_fm(rev_y1)}** (Year 1) to **{_fm(rev_yn)}** (Year {n}),
-    implying a **{_fp(rev_cagr)} projected CAGR**.
-    {f"This exceeds the trailing historical CAGR of {_fp(metrics.revenue_growth_cagr)}, "
-     f"which embeds an assumption of acceleration or market share gains."
-     if metrics and rev_cagr > metrics.revenue_growth_cagr + 0.01 else
-     f"This is below or in line with the trailing historical CAGR "
-     f"({_fp(metrics.revenue_growth_cagr)}), consistent with mean-reversion to more moderate growth."
-     if metrics else ""}
-    """)
-
-    st.markdown(f"""
-    #### 💰 Margin Profile
-    Gross margins are **{margin_dir}** from **{_fp(gm_y1)}** (Year 1) to **{_fp(gm_yn)}** (Year {n}).
-    {"Expansion reflects assumed pricing power, scale benefits, or a shift toward higher-margin products."
-     if margin_dir == "expanding" else
-     "Compression may reflect rising input costs, competition, or mix headwinds."
-     if margin_dir == "compressing" else
-     "Stable margins suggest a steady competitive position with no meaningful structural changes assumed."}
-    """)
-
-    st.markdown(f"""
-    #### 💵 Cash Generation
-    Average projected **Free Cash Flow** is **{_fm(avg_fcf)}** per year.
-    FCF conversion (FCF / EBITDA) is **{_fp(fcf_conv)}** —
-    {"**above** the ~60% benchmark, indicating capital-efficient operations."
-     if fcf_conv > 0.6 else
-     "**below** the ~60% benchmark, reflecting heavier CapEx and/or working capital consumption."}
-    """)
-
-    st.markdown(f"""
-    #### 🏦 Leverage & Debt
-    Net Debt/EBITDA starts at **{lev_y1:.1f}x** (Year 1) and {"ends" if lev_dir != "stable" else "remains"} at
-    **{lev_yn:.1f}x** (Year {n}) — leverage is **{lev_dir}**.
-    {"Declining leverage shows the business naturally deleverages as cash builds."
-     if lev_dir == "declining" else
-     "Rising leverage could signal aggressive investment, debt draws, or weak cash generation."
-     if lev_dir == "rising" else ""}
-    {"Leverage is within typical investment-grade thresholds (< 3x)." if lev_yn < 3
-     else "Leverage above 3x is elevated — worth monitoring for covenant compliance." if lev_yn < 5
-     else "Leverage above 5x is high-yield territory — heightened default risk if cash flows disappoint."}
-    """)
-
-    st.markdown(f"""
-    #### 🔒 Interest Coverage
-    EBIT/Interest in Year {n} is **{cov_yn:.1f}x** — covenant risk is **{cov_risk}**.
-    {"Coverage above 3x indicates a comfortable cushion." if cov_yn > 3
-     else "Coverage between 1.5x–3x is acceptable but leaves limited margin for error." if cov_yn >= 1.5
-     else "Coverage below 1.5x is concerning — nearly all EBIT goes to interest payments."}
-    """)
-
-    st.divider()
-    st.markdown("#### ✅ Model Integrity")
-    if integ.all_clear:
-        st.success("All integrity checks passed — model is internally consistent.")
-    else:
-        st.warning(f"{len(integ.warnings)} warning(s):")
-        for w in integ.warnings:
-            st.markdown(f"- {w}")
-
-    if metrics:
-        st.divider()
-        st.markdown("#### ⚠️ Key Model-Derived Risks")
-        risks = []
-        if metrics and rev_cagr > metrics.revenue_growth_cagr + 0.02:
-            risks.append(
-                f"**Growth assumption risk:** Projected CAGR ({_fp(rev_cagr)}) materially exceeds "
-                f"historical ({_fp(metrics.revenue_growth_cagr)}). Downside if growth disappoints."
-            )
-        if cov_yn < 2.0:
-            risks.append(
-                f"**Interest coverage risk:** Coverage of {cov_yn:.1f}x is thin. "
-                f"An EBIT shortfall of ~{(1 - 1.5 / max(cov_yn, 0.01)) * 100:.0f}% "
-                f"would breach the 1.5x threshold."
-            )
-        if lev_yn > 4.0:
-            risks.append(
-                f"**Leverage risk:** Net Debt/EBITDA of {lev_yn:.1f}x at end of projection "
-                f"is above typical investment-grade thresholds."
-            )
-        if fcf_conv < 0.40:
-            risks.append(
-                f"**CapEx/NWC drag:** FCF conversion of {_fp(fcf_conv)} is low. "
-                f"Significant capital is consumed before cash reaches equity holders."
-            )
-        if not risks:
-            risks.append("No significant model-derived risks identified for this scenario.")
-        for r in risks:
-            st.markdown(f"- {r}")
+    st.write(
+        f"{ticker} is modeled to grow revenue from {_fm(rev_y1)} to {_fm(rev_yn)}, which implies a {_fp(rev_cagr)} CAGR. "
+        f"Gross margin moves from {_fp(gm_y1)} to {_fp(gm_yn)}, while average annual FCF is {_fm(avg_fcf)} with {_fp(fcf_conv)} FCF conversion."
+    )
+    if metrics is not None:
+        st.write(
+            f"Relative to history, the forecast uses a trailing revenue CAGR benchmark of {_fp(metrics.revenue_growth_cagr)} "
+            f"and average gross margin of {_fp(metrics.gross_margin_avg)}."
+        )
+    st.write(
+        f"Net leverage changes from {lev_y1:.1f}x to {lev_yn:.1f}x over the forecast. Use the sensitivity and valuation tabs to test whether that "
+        "capital structure stays acceptable across downside cases."
+    )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
+def _render_export_button(outputs: dict, hist_df: pd.DataFrame, base_asm: ModelAssumptions) -> None:
+    """Render an Excel download button in the sidebar using the Base scenario output."""
+    base_out = outputs.get("Base")
+    if base_out is None:
+        return
+    try:
+        from model_engine.sensitivity import build_sensitivity_table
+        sensitivity = build_sensitivity_table(
+            HistoricalData(ticker="export", df=hist_df, annual_df=hist_df),
+            base_asm,
+        )
+    except Exception:
+        sensitivity = pd.DataFrame()
+    try:
+        excel_bytes = build_excel_bytes(base_out, sensitivity, hist_df)
+    except Exception:
+        return
+    st.download_button(
+        label="Export to Excel",
+        data=excel_bytes,
+        file_name="3statement_model.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
 
 def main() -> None:
-    st.set_page_config(
-        page_title="3-Statement Model",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    st.markdown("""
-    <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-    [data-testid="metric-container"] {
-        background: #f9fafb; border-radius: 8px; padding: 10px 14px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
+    st.set_page_config(page_title="3-Statement Model", layout="wide", initial_sidebar_state="expanded")
+    st.markdown(APP_CSS, unsafe_allow_html=True)
     _init_session_state()
-
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.markdown("# 📊 3-Statement Model")
-        st.markdown("*Python-powered financial modeling*")
-        st.divider()
-
-        st.markdown("### Data Source")
-        ticker = st.text_input("Ticker symbol", value="UPS").upper()
-        uploaded = st.file_uploader(
-            "Or upload historical CSV", type=["csv"],
-            help="Must match the column format in data/ups_historical_template.csv",
-        )
-        csv_bytes = uploaded.read() if uploaded else None
-
-        analyze_clicked = st.button(
-            "🔍 Analyze Company", use_container_width=True, type="primary",
-            help="Load data and auto-populate assumption sliders from historical financials.",
-        )
-        st.divider()
-
-        # Revenue Growth
-        with st.expander("📈 Revenue Growth", expanded=True):
-            st.slider("Year 1 Growth Rate", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
-            st.slider(f"Year {PROJ_YEARS} Growth Rate", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
-            st.caption("Linearly interpolated between Year 1 and Year N.")
-
-        # Margins
-        with st.expander("💰 Margins", expanded=True):
-            st.slider("Gross Margin — Year 1", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
-            st.slider(f"Gross Margin — Year {PROJ_YEARS}", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
-            st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
-
-        # Capital Intensity
-        with st.expander("🏗️ Capital Intensity", expanded=False):
-            st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
-            st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
-
-        # Working Capital
-        with st.expander("🔄 Working Capital (days)", expanded=False):
-            st.slider("DSO — Days to collect", 1, 120, step=1, key="dso_days")
-            st.slider("DIO — Days inventory held", 1, 120, step=1, key="dio_days")
-            st.slider("DPO — Days to pay suppliers", 1, 120, step=1, key="dpo_days")
-
-        # Financing
-        with st.expander("🏦 Financing", expanded=False):
-            st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
-            st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
-            st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
-            st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
-
-        st.divider()
-        st.markdown("*🐂 Bull = Base +2.5pp growth, +1.5pp margin*")
-        st.markdown("*🐻 Bear = Base −2.5pp growth, −2.0pp margin*")
-        st.divider()
-        st.markdown("*Built with Python · Streamlit · Plotly*")
-
-    # ── Load data ─────────────────────────────────────────────────────────────
-    try:
-        hist_df = _load_data(ticker, csv_bytes)
-    except Exception as e:
-        st.error(f"Could not load data for **{ticker}**: {e}")
-        st.info("Try a different ticker symbol, or upload a CSV file using the sidebar.")
+    if not _auth_gate():
         return
 
-    # ── Analyze on button click ───────────────────────────────────────────────
+    ticker, csv_bytes, analyze_clicked = _sidebar_search()
+    try:
+        hist = _load_data(ticker, csv_bytes)
+    except Exception as exc:
+        st.error(f"Could not load data for {ticker}: {exc}")
+        st.info("Try a different ticker, or upload a CSV.")
+        return
+
     if analyze_clicked:
         try:
-            hist_obj = HistoricalData(ticker=ticker, df=hist_df)
-            metrics = analyze_historical_data(hist_obj)
-            smart = suggest_scenarios(metrics, years=PROJ_YEARS)
-            base_s = smart["Base"]
+            metrics = analyze_historical_data(HistoricalData(ticker=ticker, df=hist.annual(), annual_df=hist.annual()))
+            smart = suggest_scenarios(metrics, years=PROJ_YEARS)["Base"]
+            st.session_state["metrics"] = metrics
+            st.session_state["growth_y1"] = round(float(smart.revenue_growth[0]), 4)
+            st.session_state["growth_yn"] = round(float(smart.revenue_growth[-1]), 4)
+            st.session_state["gm_y1"] = round(float(smart.gross_margin[0]), 4)
+            st.session_state["gm_yn"] = round(float(smart.gross_margin[-1]), 4)
+            st.session_state["opex_pct"] = round(float(smart.opex_pct_revenue[0]), 4)
+            st.session_state["capex_pct"] = round(float(smart.capex_pct_revenue[0]), 4)
+            st.session_state["dep_pct"] = round(float(smart.depreciation_pct_ppne), 4)
+            st.session_state["tax_rate"] = round(float(smart.tax_rate), 4)
+            st.session_state["int_rate"] = round(float(smart.interest_rate_on_debt), 4)
+            st.session_state["div_payout"] = round(float(smart.dividend_payout_ratio), 4)
+            st.session_state["dso_days"] = max(int(round(smart.dso_days[0])), 1)
+            st.session_state["dio_days"] = max(int(round(smart.dio_days[0])), 1)
+            st.session_state["dpo_days"] = max(int(round(smart.dpo_days[0])), 1)
+            st.session_state["debt_amort"] = int(round(float(smart.debt_amortization[0])))
+        except Exception as exc:
+            st.warning(f"Historical analysis could not auto-seed assumptions: {exc}")
 
-            # Push smart defaults into session state (sliders will pick these up on rerun)
-            st.session_state["growth_y1"]  = round(float(base_s.revenue_growth[0]), 4)
-            st.session_state["growth_yn"]  = round(float(base_s.revenue_growth[-1]), 4)
-            st.session_state["gm_y1"]      = round(float(base_s.gross_margin[0]), 4)
-            st.session_state["gm_yn"]      = round(float(base_s.gross_margin[-1]), 4)
-            st.session_state["opex_pct"]   = round(float(base_s.opex_pct_revenue[0]), 4)
-            st.session_state["capex_pct"]  = round(float(base_s.capex_pct_revenue[0]), 4)
-            st.session_state["dep_pct"]    = round(float(base_s.depreciation_pct_ppne), 4)
-            st.session_state["tax_rate"]   = round(float(base_s.tax_rate), 4)
-            st.session_state["int_rate"]   = round(float(base_s.interest_rate_on_debt), 4)
-            st.session_state["div_payout"] = round(float(base_s.dividend_payout_ratio), 4)
-            st.session_state["dso_days"]   = max(int(round(base_s.dso_days[0])), 1)
-            st.session_state["dio_days"]   = max(int(round(base_s.dio_days[0])), 1)
-            st.session_state["dpo_days"]   = max(int(round(base_s.dpo_days[0])), 1)
-            st.session_state["debt_amort"] = max(int(round(base_s.debt_amortization[0])), 0)
-            st.session_state["metrics"]    = metrics
-            st.session_state["last_ticker"] = ticker
-
-            st.success(
-                f"✅ Smart defaults loaded for **{ticker}**! "
-                f"Sliders now reflect historical averages. Adjust any assumption and the model updates instantly."
-            )
-            st.rerun()
-        except Exception as e:
-            st.error(f"Analysis failed: {e}")
-
+    annual_df = hist.annual().copy()
     metrics = st.session_state.get("metrics")
-    if st.session_state.get("last_ticker") != ticker:
-        metrics = None  # stale metrics from a different ticker
+    if metrics is None:
+        try:
+            metrics = analyze_historical_data(HistoricalData(ticker=ticker, df=annual_df, annual_df=annual_df))
+            st.session_state["metrics"] = metrics
+        except Exception:
+            metrics = None
 
-    # ── Build assumptions ─────────────────────────────────────────────────────
+    profile_name = hist.profile.name if hist.profile else None
+    _hero(profile_name, ticker, hist)
+
     base_asm = _build_base_asm()
-    bull_asm = _shift_asm(base_asm, g_shift=+0.025, m_shift=+0.015)
-    bear_asm = _shift_asm(base_asm, g_shift=-0.025, m_shift=-0.020)
+    scenarios = {
+        "Base": base_asm,
+        "Bull": _shift_asm(base_asm, 0.025, 0.015),
+        "Bear": _shift_asm(base_asm, -0.025, -0.02),
+    }
 
-    # ── Run models ────────────────────────────────────────────────────────────
-    hist_json = hist_df.to_json()
-    try:
-        outputs = {
-            "Base": _run_model(hist_json, ticker, _asm_to_json(base_asm)),
-            "Bull": _run_model(hist_json, ticker, _asm_to_json(bull_asm)),
-            "Bear": _run_model(hist_json, ticker, _asm_to_json(bear_asm)),
-        }
-    except Exception as e:
-        st.error(f"Model error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return
+    hist_json = annual_df.to_json()
+    outputs = {name: _run_model(hist_json, ticker, _asm_to_json(asm)) for name, asm in scenarios.items()}
 
-    # ── Header metrics ────────────────────────────────────────────────────────
-    st.markdown(f"## {ticker} — 3-Statement Financial Model")
-    c1, c2, c3 = st.columns(3)
-    for col, name in zip([c1, c2, c3], ["Base", "Bull", "Bear"]):
-        avg_fcf = outputs[name].fcf["fcf"].mean()
-        col.metric(f"{SCENARIO_EMOJI[name]} {name} — Avg FCF", _fm(avg_fcf))
+    with st.sidebar:
+        st.divider()
+        _render_export_button(outputs, annual_df, base_asm)
 
-    if not analyze_clicked and metrics is None:
-        st.info(
-            "💡 **Tip:** Click **🔍 Analyze Company** in the sidebar to auto-populate assumption "
-            "sliders from historical data. Default assumptions are shown for now."
-        )
-
-    st.divider()
-
-    # ── 9 Tabs ────────────────────────────────────────────────────────────────
-    tabs = st.tabs([
-        "📈 Overview",
-        "🎯 Drivers",
-        "📋 Income Statement",
-        "🏛️ Balance Sheet",
-        "💵 Cash Flow",
-        "🗂️ Schedules",
-        "🔍 Sensitivity",
-        "📐 Valuation",
-        "💡 Interpretation",
-    ])
-
+    tabs = st.tabs(
+        ["Home", "Overview", "Research", "Drivers", "Income Statement", "Balance Sheet", "Cash Flow", "Schedules", "Sensitivity", "Valuation", "Interpretation"]
+    )
     with tabs[0]:
-        tab_overview(hist_df, ticker)
+        tab_home(hist)
     with tabs[1]:
-        tab_drivers(metrics)
+        tab_overview(hist, ticker)
     with tabs[2]:
-        tab_income(outputs)
+        tab_research(hist)
     with tabs[3]:
-        tab_balance_sheet(outputs)
+        tab_drivers(metrics)
     with tabs[4]:
-        tab_cash_flow(outputs)
+        tab_income(outputs)
     with tabs[5]:
-        tab_schedules(outputs, base_asm)
+        tab_balance_sheet(outputs)
     with tabs[6]:
-        tab_sensitivity(outputs, hist_df, ticker, base_asm)
+        tab_cash_flow(outputs)
     with tabs[7]:
-        tab_valuation(outputs, hist_df)
+        tab_schedules(outputs, base_asm)
     with tabs[8]:
+        tab_sensitivity(outputs, annual_df, ticker, base_asm)
+    with tabs[9]:
+        tab_valuation(outputs, hist)
+    with tabs[10]:
         tab_interpretation(outputs, ticker, metrics)
+
+    st.markdown(
+        """
+        <div class="site-footer">
+            Built by <a href="https://dmbriner.github.io/" target="_blank" rel="noopener noreferrer">Dana Briner</a>
+            &nbsp;&middot;&nbsp;
+            Equity research &amp; forecasting platform
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
