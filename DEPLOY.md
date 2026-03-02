@@ -1,63 +1,103 @@
-# Deployment Guide
+# Self-Hosted Deployment Guide
 
-## 1. Push to GitHub
+## Target setup
 
-Create a new GitHub repository, then run:
+- One VPS you control
+- `Docker Compose`
+- `Caddy` for HTTPS
+- `Next.js` frontend
+- `FastAPI` backend
+- `Postgres`
+- `Clerk` for auth
+
+## 1. Provision the server
+
+Use Ubuntu on a VPS.
+
+Install Docker:
 
 ```bash
-git init
-git add .
-git commit -m "Initial public research platform"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-git push -u origin main
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin
+sudo systemctl enable docker
+sudo systemctl start docker
 ```
 
-If the repo already exists locally, only run the last three commands with your actual GitHub URL.
+## 2. Clone the repo
 
-## 2. Deploy on Render
-
-1. Sign in to Render.
-2. Create a new `Web Service`.
-3. Connect your GitHub repository.
-4. Render should detect [render.yaml](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/render.yaml).
-5. Add these environment variables:
-
-```text
-FMP_API_KEY=your_financial_modeling_prep_key
-APP_ACCESS_PASSWORD=optional_password
+```bash
+git clone YOUR_REPO_URL
+cd python-3statement-model
 ```
 
-6. Deploy and use the generated public URL.
+## 3. Configure secrets
 
-## 3. Optional custom domain
+Create and fill:
 
-After deployment, attach your own domain in Render settings, for example:
+- `frontend/.env`
+- `backend/.env`
+- `deploy/.env`
 
-```text
-research.yourdomain.com
+Use [`frontend/.env.example`](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/frontend/.env.example), [`backend/.env.example`](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/backend/.env.example), and [`deploy/selfhost.env.example`](/Users/danabriner/Desktop/Extracurriculars/Projects/Python%203%20Statement%20Model/python-3statement-model/deploy/selfhost.env.example) as templates.
+
+For Docker Compose, backend database access should target the internal Postgres service:
+
+```env
+DATABASE_URL=postgresql+psycopg://statement_model:change_me@postgres:5432/statement_model
 ```
 
-## 4. Streamlit Community Cloud alternative
+## 4. DNS
 
-1. Push the repo to GitHub.
-2. Create a new app in Streamlit Community Cloud.
-3. Set the entrypoint to `app.py`.
-4. Add `FMP_API_KEY` and optional `APP_ACCESS_PASSWORD`.
+Point your domain at the VPS public IP.
 
-## 5. What the public website will expose
+Then set:
 
-- Home / landing page
-- Company research workspace
-- Historical annual and quarterly views
-- Forecast model
-- Sensitivity analysis
-- DCF, comps, precedents, and LBO valuation
+```env
+DOMAIN=yourdomain.com
+```
 
-## 6. What still requires a stronger backend if you want a real product
+in `deploy/.env`.
 
-- User accounts
-- Saved models
-- Database-backed watchlists
-- Team collaboration
-- Premium transaction datasets
+## 5. Run migrations
+
+```bash
+docker compose --env-file deploy/.env run --rm backend alembic upgrade head
+```
+
+## 6. Start the app
+
+```bash
+docker compose --env-file deploy/.env up -d --build
+```
+
+## 7. Verify
+
+- `https://yourdomain.com`
+- `https://yourdomain.com/api/healthz`
+
+## 8. Common operations
+
+Rebuild after code changes:
+
+```bash
+docker compose --env-file deploy/.env up -d --build
+```
+
+View logs:
+
+```bash
+docker compose logs -f
+```
+
+Run migrations after schema changes:
+
+```bash
+docker compose --env-file deploy/.env run --rm backend alembic upgrade head
+```
+
+## 9. Security notes
+
+- change the default Postgres password
+- keep ports `80` and `443` open, but do not expose Postgres publicly
+- keep your Clerk secret key only in `backend/.env`
+- back up the Postgres volume regularly

@@ -4,3 +4,8 @@ __pycache__/
 outputs/*.xlsx
 .streamlit/secrets.toml
 .env
+frontend/node_modules/
+frontend/.next/
+backend/.env
+frontend/.env
+deploy/.env

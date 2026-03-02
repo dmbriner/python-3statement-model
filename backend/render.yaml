@@ -15,7 +15,7 @@ services:
         sync: false
       - key: CLERK_PUBLISHABLE_KEY
         sync: false
-      - key: FMP_API_KEY
-        sync: false
       - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: FMP_API_KEY
         sync: false

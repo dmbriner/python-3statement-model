@@ -24,9 +24,7 @@ from model_engine import (
     build_research_pack,
     build_multi_output_sensitivity,
     build_tornado_chart,
-    clear_api_credentials,
     check_integrity,
-    current_api_credentials,
     fmp_enabled,
     format_line_item_label,
     load_historical_data,
@@ -37,11 +35,11 @@ from model_engine import (
     run_precedent_transactions,
     run_three_statement_model,
     search_companies,
-    set_api_credentials,
     suggest_scenarios,
     valuation_summary_table,
     wacc_terminal_sensitivity,
 )
+from model_engine.runtime_config import clear_api_credentials, current_api_credentials, set_api_credentials
 
 PROJ_YEARS = 5
 SCENARIO_COLORS = {"Base": "#0f4c81", "Bull": "#0d7a5f", "Bear": "#a13d2d"}
