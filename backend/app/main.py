@@ -9,7 +9,7 @@ from app.core.config import settings
 
 def create_application() -> FastAPI:
     app = FastAPI(
-        title="3-Statement Platform API",
+        title=settings.app_name,
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
@@ -18,6 +18,7 @@ def create_application() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
+        allow_origin_regex=settings.cors_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import type { Route } from "next";
 import clsx from "clsx";
 
+import { stripBasePath } from "@/lib/site";
+
 const links = [
   { href: "/" as Route, label: "Dashboard" },
   { href: "/model" as Route, label: "Model" },
@@ -15,6 +17,7 @@ const links = [
 
 export function AppNav() {
   const pathname = usePathname();
+  const activePath = stripBasePath(pathname);
 
   return (
     <div className="panel soft" style={{ marginTop: 18 }}>
@@ -23,7 +26,7 @@ export function AppNav() {
           <Link
             key={link.href}
             href={link.href}
-            className={clsx("button secondary", pathname === link.href && "button")}
+            className={clsx("button secondary", activePath === link.href && "button")}
           >
             {link.label}
           </Link>

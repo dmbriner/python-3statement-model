@@ -2,6 +2,8 @@
 
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
 
+import { withBasePath } from "@/lib/site";
+
 export function AuthPanel() {
   const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
@@ -12,7 +14,7 @@ export function AuthPanel() {
       ) : (
         <>
           <SignedIn>
-            <UserButton afterSignOutUrl="/" />
+            <UserButton afterSignOutUrl={withBasePath("/")} />
           </SignedIn>
           <SignedOut>
             <SignInButton mode="modal">

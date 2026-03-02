@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 
 import { AnalysisProvider } from "@/components/AnalysisContext";
+import { appName } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "3-Statement Platform",
-  description: "Professional equity research, 3-statement modeling, and valuation platform.",
+  title: appName,
+  description: "Institutional-style equity research, 3-statement modeling, and valuation platform.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

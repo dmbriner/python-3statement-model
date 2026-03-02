@@ -4,6 +4,7 @@ import { AppNav } from "@/components/AppNav";
 import { AuthPanel } from "@/components/AuthPanel";
 import { CompanyWorkspace } from "@/components/CompanyWorkspace";
 import { useAnalysis } from "@/components/AnalysisContext";
+import { appName } from "@/lib/site";
 
 export function DashboardShell() {
   const { analysis } = useAnalysis();
@@ -14,7 +15,7 @@ export function DashboardShell() {
         <div className="eyebrow">Next.js + FastAPI + Postgres</div>
         <div className="topbar">
           <div>
-            <h1>Institutional-style research platform, built as a real product.</h1>
+            <h1>{appName} is an institutional-style research platform built as a real product.</h1>
             <p>
               This frontend is the replacement path for the old Streamlit shell: proper auth,
               typed API calls, deployable frontend hosting on Vercel, and a backend that keeps
