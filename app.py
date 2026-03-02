@@ -261,9 +261,13 @@ h1, h2, h3, h4 {
 }
 
 .welcome-hero h1 {
-    font-size: 2.6rem;
+    font-size: 2.8rem;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-weight: 700;
     line-height: 1.15;
     margin-bottom: 1rem;
+    color: var(--ink);
+    letter-spacing: -0.01em;
 }
 
 .welcome-hero p {
@@ -271,6 +275,19 @@ h1, h2, h3, h4 {
     font-size: 1.05rem;
     line-height: 1.6;
     margin-bottom: 1.8rem;
+}
+
+/* ── Sidebar section boxes ── */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+}
+
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 0.5rem 0.75rem;
 }
 
 /* ── Misc ── */
@@ -581,9 +598,20 @@ def _sidebar_search() -> tuple[str, bytes | None, bool]:
             state = "Unlocked" if st.session_state.get("is_authenticated") else "Locked"
             st.caption(f"Access: {state}")
         st.divider()
-        st.markdown("### Company Search")
-        st.caption("Type a name or ticker. Click Use to select.")
-        query = st.text_input("Search", key="search_query")
+        st.markdown(
+            """
+            <div style="background:#0f4c81;border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.75rem;">
+                <div style="color:#ffffff;font-family:'Playfair Display',Georgia,serif;font-size:1rem;font-weight:600;letter-spacing:0.01em;">
+                    Search any public company
+                </div>
+                <div style="color:rgba(255,255,255,0.78);font-size:0.82rem;margin-top:0.2rem;">
+                    Enter a name or ticker symbol below
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        query = st.text_input("Company name or ticker", key="search_query", placeholder="e.g. Apple, AAPL, Microsoft...")
 
         if len(query.strip()) >= 1:
             try:
@@ -595,17 +623,17 @@ def _sidebar_search() -> tuple[str, bytes | None, bool]:
             results = []
 
         for idx, result in enumerate(results[:6]):
-            cols = st.columns([1, 4, 1])
-            with cols[0]:
-                if result.logo_url:
-                    st.image(result.logo_url, width=28)
-            with cols[1]:
-                st.markdown(f"**{result.name}**")
-                st.caption(f"{result.symbol} • {result.exchange}")
-            with cols[2]:
-                if st.button("Use", key=f"use_{result.symbol}_{idx}", use_container_width=True):
-                    st.session_state["selected_ticker"] = result.symbol
-                    st.session_state["search_query"] = result.symbol
+            with st.container(border=True):
+                cols = st.columns([1, 4, 1])
+                with cols[0]:
+                    if result.logo_url:
+                        st.image(result.logo_url, width=28)
+                with cols[1]:
+                    st.markdown(f"**{result.name or result.symbol}**")
+                    st.caption(f"{result.symbol} • {result.exchange}")
+                with cols[2]:
+                    if st.button("Use", key=f"use_{result.symbol}_{idx}", use_container_width=True):
+                        st.session_state["selected_ticker"] = result.symbol
 
         st.divider()
         ticker = st.text_input("Selected ticker", value=st.session_state.get("selected_ticker", ""), placeholder="e.g. AAPL, MSFT, NVDA").upper()
@@ -620,29 +648,30 @@ def _sidebar_search() -> tuple[str, bytes | None, bool]:
 
         st.radio("Historical view", ["Full Year", "Quarterly"], horizontal=True, key="reporting_view")
         analyze_clicked = st.button("Analyze Company", use_container_width=True, type="primary")
-        st.divider()
 
-        with st.expander("Forecast Assumptions", expanded=True):
-            st.slider("Year 1 Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
-            st.slider(f"Year {PROJ_YEARS} Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
-            st.slider("Year 1 Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
-            st.slider(f"Year {PROJ_YEARS} Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
-            st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
-            st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
-            st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
+        if ticker:
+            st.divider()
+            with st.expander("Forecast Assumptions", expanded=True):
+                st.slider("Year 1 Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_y1")
+                st.slider(f"Year {PROJ_YEARS} Revenue Growth", -0.10, 0.30, step=0.005, format="%.1f%%", key="growth_yn")
+                st.slider("Year 1 Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_y1")
+                st.slider(f"Year {PROJ_YEARS} Gross Margin", 0.05, 0.85, step=0.005, format="%.1f%%", key="gm_yn")
+                st.slider("OpEx % of Revenue", 0.01, 0.50, step=0.005, format="%.1f%%", key="opex_pct")
+                st.slider("CapEx % of Revenue", 0.01, 0.20, step=0.005, format="%.1f%%", key="capex_pct")
+                st.slider("Depreciation % of PP&E", 0.03, 0.35, step=0.005, format="%.1f%%", key="dep_pct")
 
-        with st.expander("Working Capital", expanded=False):
-            st.slider("DSO", 1, 120, step=1, key="dso_days")
-            st.slider("DIO", 1, 120, step=1, key="dio_days")
-            st.slider("DPO", 1, 120, step=1, key="dpo_days")
+            with st.expander("Working Capital", expanded=False):
+                st.slider("DSO", 1, 120, step=1, key="dso_days")
+                st.slider("DIO", 1, 120, step=1, key="dio_days")
+                st.slider("DPO", 1, 120, step=1, key="dpo_days")
 
-        with st.expander("Financing", expanded=False):
-            st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
-            st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
-            st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
-            st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
+            with st.expander("Financing", expanded=False):
+                st.slider("Tax Rate", 0.10, 0.40, step=0.005, format="%.1f%%", key="tax_rate")
+                st.slider("Interest Rate on Debt", 0.01, 0.15, step=0.005, format="%.1f%%", key="int_rate")
+                st.slider("Dividend Payout Ratio", 0.00, 0.80, step=0.01, format="%.0f%%", key="div_payout")
+                st.slider("Annual Debt Amortization ($M)", 0, 5000, step=50, key="debt_amort")
 
-        st.caption("Valuation covers DCF, trading comps, precedents, and LBO. Historical view toggles between annual and quarterly API pulls.")
+            st.caption("Valuation covers DCF, trading comps, precedents, and LBO. Historical view toggles between annual and quarterly API pulls.")
 
     return ticker, csv_bytes, analyze_clicked
 
@@ -652,7 +681,7 @@ def _render_welcome() -> None:
     st.markdown(
         """
         <div class="welcome-hero">
-            <h1>Institutional-Grade Equity Research</h1>
+            <h1>Equity Research</h1>
             <p>
                 Search any public company to load live financial statements, build a
                 linked 3-statement model, run scenario and sensitivity analysis, and
